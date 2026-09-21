@@ -313,11 +313,15 @@
     let keyStartedTurbo = false;
     let rightClickBoostLock = false;
 
-    // 🚀 Turbo wall-clock reconciliation
-    let turboRateFramesPerSec = 0;
-    let turboRateSampleStart = 0;
-    let turboRateSampleFrames = 0;
+    // 🚀 Turbo rate — moving-window estimate
+    let turboRateWindowStart = 0;
+    let turboRateWindowFrames = 0;
+    let turboRateLastEstimate = 0;
     let turboLastFrameTime = 0;
+
+    // Global heartbeat
+    let globalHeartbeatLast = 0;
+    let globalHeartbeatTimer = null;
 
     // ⏱️ Normal Auto-Repeat wall-clock state
     let autoRepeatState = null;
@@ -697,7 +701,7 @@
     }
 
     /* ============================================================
-       ⏱️ WALL-CLOCK NORMAL AUTO REPEAT
+       WALL-CLOCK NORMAL AUTO REPEAT
        ============================================================ */
     function startNormalAutoRepeat() {
       stopNormalAutoRepeat();
@@ -1171,10 +1175,10 @@
       if (!currentMantra) return;
       turboActive = true;
       turboFrames = 0;
-      turboStartedAt = performance.now();
-      turboRateFramesPerSec = 0;
-      turboRateSampleStart = 0;
-      turboRateSampleFrames = 0;
+      turboStartedAt = Date.now();
+      turboRateWindowStart = 0;
+      turboRateWindowFrames = 0;
+      turboRateLastEstimate = 0;
       turboLastFrameTime = Date.now();
       applyTurboSpeed(document.getElementById("turboSpeedSelect").value);
       prepareTurbo();
@@ -1204,7 +1208,7 @@
       if (currentUserId && currentMantra) {
         scheduleCloudSave();
       }
-      const elapsed = ((performance.now() - turboStartedAt) / 1000).toFixed(1);
+      const elapsed = ((Date.now() - turboStartedAt) / 1000).toFixed(1);
       setTurboInfo("🚀 Turbo burst: " + elapsed + " sec — "
         + (hyperState ? formatHyper(hyperState) : bigToDisplay(count)), false);
     }
@@ -1240,40 +1244,52 @@
       if (currentUserId && currentMantra) scheduleCloudSave();
     }
 
-    /* ============================================================
-       🚀 NEW: On-demand Turbo rate — available after just 1 frame.
-       Fixes the case where lid is closed before the 500ms sample
-       window completes, leaving rate at 0 → no catch-up.
-       ============================================================ */
+    /* 🚀 Robust Turbo rate — moving window + fallback to total estimate */
     function currentTurboRate() {
+      if (turboRateLastEstimate > 0) return turboRateLastEstimate;
       if (turboFrames <= 0) return 0;
       const elapsedMs = Date.now() - turboStartedAt;
       if (elapsedMs <= 0) return 0;
       return turboFrames / (elapsedMs / 1000);
     }
 
-    /* ============================================================
-       🚀 TURBO MATH TICK — freeze check runs BEFORE timestamp update,
-       and uses currentTurboRate() so it's available even after
-       just a few frames.
-       ============================================================ */
+    function updateTurboRate() {
+      const now = Date.now();
+      if (turboRateWindowStart === 0) {
+        turboRateWindowStart = now;
+        turboRateWindowFrames = turboFrames;
+        return;
+      }
+      const windowMs = now - turboRateWindowStart;
+      if (windowMs >= 500) {
+        const frames = turboFrames - turboRateWindowFrames;
+        const est = frames / (windowMs / 1000);
+        if (est > 0) turboRateLastEstimate = est;
+        turboRateWindowStart = now;
+        turboRateWindowFrames = turboFrames;
+      }
+    }
+
+    /* 🚀 Turbo math loop — freeze detection runs BEFORE timestamp update */
     function turboMathTick() {
       if (!turboActive) return;
 
       const now = Date.now();
 
-      // 🚀 FREEZE DETECTION — runs FIRST, before turboLastFrameTime updates
-      if (turboLastFrameTime > 0 && turboFrames > 5) {
+      // Freeze detection
+      if (turboLastFrameTime > 0 && turboFrames > 3) {
         const gap = now - turboLastFrameTime;
-        if (gap > 2000) {
+        if (gap > 1500) {
           const rate = currentTurboRate();
-          const missed = Math.floor((gap / 1000) * rate) - 1;
-          if (missed > 0) {
-            const actual = Math.min(missed, CATCHUP_CAP);
-            console.log("[Turbo] Freeze " + gap + "ms @ " + rate.toFixed(0) + "/sec → " + actual + " frames");
-            applyTurboFrames(actual);
-            turboFrames += actual;
-            setTurboInfo("⚡ Caught up " + actual.toLocaleString("en-IN") + " missed Turbo frames.", false, true);
+          if (rate > 0) {
+            const missed = Math.floor((gap / 1000) * rate) - 1;
+            if (missed > 0) {
+              const actual = Math.min(missed, CATCHUP_CAP);
+              console.log("[Turbo-Math] Freeze " + gap + "ms @ " + rate.toFixed(0) + "/sec → " + actual);
+              applyTurboFrames(actual);
+              turboFrames += actual;
+              setTurboInfo("⚡ Caught up " + actual.toLocaleString("en-IN") + " missed Turbo frames.", false, true);
+            }
           }
         }
       }
@@ -1298,19 +1314,7 @@
 
       turboFrames++;
       turboLastFrameTime = now;
-
-      // Sample rate for logging (not required for catch-up anymore)
-      if (turboRateSampleStart === 0) {
-        turboRateSampleStart = now;
-        turboRateSampleFrames = 0;
-      }
-      turboRateSampleFrames++;
-      const sampleElapsed = now - turboRateSampleStart;
-      if (sampleElapsed >= 500 && turboRateSampleFrames > 20) {
-        turboRateFramesPerSec = turboRateSampleFrames / (sampleElapsed / 1000);
-        turboRateSampleStart = now;
-        turboRateSampleFrames = 0;
-      }
+      updateTurboRate();
 
       if (turboFrames % 1000 === 0 && currentMantra) {
         storeCount(currentMantra, count);
@@ -1319,33 +1323,67 @@
       turboMathTimer = setTimeout(turboMathTick, 0);
     }
 
-    /* ============================================================
-       🚀 Wake reconciler — uses currentTurboRate() for full coverage
-       ============================================================ */
+    /* 🚀 Wake reconciler */
     function reconcileTurbo() {
       if (!turboActive) return;
-      if (!turboLastFrameTime || turboFrames <= 5) return;
+      if (!turboLastFrameTime || turboFrames <= 3) return;
 
       const now = Date.now();
       const elapsed = now - turboLastFrameTime;
-      if (elapsed < 2000) return;
+      if (elapsed < 1500) return;
 
       const rate = currentTurboRate();
+      if (rate <= 0) return;
+
       const missed = Math.floor((elapsed / 1000) * rate) - 1;
       if (missed <= 0) return;
 
       const actual = Math.min(missed, CATCHUP_CAP);
-      console.log("[Turbo] Wake reconcile " + elapsed + "ms @ " + rate.toFixed(0) + "/sec → " + actual + " frames");
+      console.log("[Turbo-Wake] " + elapsed + "ms @ " + rate.toFixed(0) + "/sec → " + actual);
       applyTurboFrames(actual);
       turboFrames += actual;
       setTurboInfo("⚡ Caught up " + actual.toLocaleString("en-IN") + " missed Turbo frames.", false, true);
       turboLastFrameTime = now;
     }
 
+    /* 🚀 Display loop — calls reconcileTurbo EVERY frame (very reliable) */
     function turboDisplayLoop() {
       if (!turboActive) return;
+      reconcileTurbo();
       updateDisplay();
       turboDisplayRAF = requestAnimationFrame(turboDisplayLoop);
+    }
+
+    /* 🚀 GLOBAL HEARTBEAT — independent watchdog, fires every 1s */
+    function startGlobalHeartbeat() {
+      if (globalHeartbeatTimer !== null) return;
+      globalHeartbeatLast = Date.now();
+      globalHeartbeatTimer = setInterval(function() {
+        const now = Date.now();
+        const gap = now - globalHeartbeatLast;
+        globalHeartbeatLast = now;
+
+        if (gap > 3000) {
+          console.log("[Heartbeat] Freeze " + gap + "ms — full reconcile");
+          reconcileAutoRepeat();
+          reconcileTurbo();
+
+          // Revive dead loops
+          if (turboActive && turboMathTimer === null) {
+            console.log("[Heartbeat] Turbo math loop dead — restarting");
+            turboMathTick();
+          }
+          if (turboActive && turboDisplayRAF === null) {
+            console.log("[Heartbeat] Turbo display loop dead — restarting");
+            turboDisplayLoop();
+          }
+          if (autoRepeatState && autoRepeatTimer === null) {
+            console.log("[Heartbeat] Auto-repeat loop dead — restarting");
+            autoRepeatTimer = setInterval(reconcileAutoRepeat, 100);
+          }
+        }
+      }, 1000);
+      console.log("[Heartbeat] Started");
     }
 
     document.addEventListener("keydown", function(e) {
@@ -1543,7 +1581,7 @@
       if (tag === "button") e.preventDefault();
     }, { passive: false });
 
-    /* ⏱️ Wake handlers — reconcile BOTH normal and turbo */
+    /* Wake handlers — multiple redundant paths */
     document.addEventListener("visibilitychange", function() {
       if (document.visibilityState === "visible") {
         console.log("[Visibility] Visible — reconciling");
@@ -1555,10 +1593,17 @@
       }
     });
     window.addEventListener("pageshow", function() {
+      console.log("[pageshow] reconciling");
       reconcileAutoRepeat();
       reconcileTurbo();
     });
     window.addEventListener("focus", function() {
+      console.log("[focus] reconciling");
+      reconcileAutoRepeat();
+      reconcileTurbo();
+    });
+    window.addEventListener("resume", function() {
+      console.log("[resume] reconciling");
       reconcileAutoRepeat();
       reconcileTurbo();
     });
@@ -1713,6 +1758,9 @@
       const savedKey = lsGet("customKeyMapping", "");
       if (savedKey) setCustomKey(savedKey);
       updateDisplay();
+
+      // 🚀 Start the global heartbeat watchdog
+      startGlobalHeartbeat();
 
       setTimeout(function() {
         if (resumeAutoRepeatIfNeeded()) {
