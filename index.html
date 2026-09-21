@@ -1241,26 +1241,36 @@
     }
 
     /* ============================================================
-       🚀 TURBO MATH TICK — now with freeze detection INSIDE
-       -----------------------------------------------------------
-       CRITICAL: the freeze check runs BEFORE turboLastFrameTime is
-       updated. This is what the previous version got wrong — the
-       loop fires first on wake, so the timestamp was already
-       advanced before reconcileTurbo could see the gap.
+       🚀 NEW: On-demand Turbo rate — available after just 1 frame.
+       Fixes the case where lid is closed before the 500ms sample
+       window completes, leaving rate at 0 → no catch-up.
+       ============================================================ */
+    function currentTurboRate() {
+      if (turboFrames <= 0) return 0;
+      const elapsedMs = Date.now() - turboStartedAt;
+      if (elapsedMs <= 0) return 0;
+      return turboFrames / (elapsedMs / 1000);
+    }
+
+    /* ============================================================
+       🚀 TURBO MATH TICK — freeze check runs BEFORE timestamp update,
+       and uses currentTurboRate() so it's available even after
+       just a few frames.
        ============================================================ */
     function turboMathTick() {
       if (!turboActive) return;
 
       const now = Date.now();
 
-      // 🚀 FREEZE DETECTION — BEFORE updating turboLastFrameTime
-      if (turboLastFrameTime > 0 && turboRateFramesPerSec > 0) {
+      // 🚀 FREEZE DETECTION — runs FIRST, before turboLastFrameTime updates
+      if (turboLastFrameTime > 0 && turboFrames > 5) {
         const gap = now - turboLastFrameTime;
-        if (gap > 500) {
-          const missed = Math.floor((gap / 1000) * turboRateFramesPerSec) - 1;
+        if (gap > 2000) {
+          const rate = currentTurboRate();
+          const missed = Math.floor((gap / 1000) * rate) - 1;
           if (missed > 0) {
             const actual = Math.min(missed, CATCHUP_CAP);
-            console.log("[Turbo] Freeze " + gap + "ms → catching up " + actual + " frames");
+            console.log("[Turbo] Freeze " + gap + "ms @ " + rate.toFixed(0) + "/sec → " + actual + " frames");
             applyTurboFrames(actual);
             turboFrames += actual;
             setTurboInfo("⚡ Caught up " + actual.toLocaleString("en-IN") + " missed Turbo frames.", false, true);
@@ -1268,7 +1278,7 @@
         }
       }
 
-      // Do the single-frame increment
+      // Single-frame increment
       if (turboHyper) {
         const batchSci = (turboBoostActive && turboBoostedBatchSci)
           ? turboBoostedBatchSci
@@ -1287,11 +1297,9 @@
       }
 
       turboFrames++;
-
-      // Update last frame time AFTER the freeze check
       turboLastFrameTime = now;
 
-      // Rate sampling
+      // Sample rate for logging (not required for catch-up anymore)
       if (turboRateSampleStart === 0) {
         turboRateSampleStart = now;
         turboRateSampleFrames = 0;
@@ -1302,7 +1310,6 @@
         turboRateFramesPerSec = turboRateSampleFrames / (sampleElapsed / 1000);
         turboRateSampleStart = now;
         turboRateSampleFrames = 0;
-        console.log("[Turbo] Rate: " + turboRateFramesPerSec.toFixed(0) + " frames/sec");
       }
 
       if (turboFrames % 1000 === 0 && currentMantra) {
@@ -1312,19 +1319,23 @@
       turboMathTimer = setTimeout(turboMathTick, 0);
     }
 
+    /* ============================================================
+       🚀 Wake reconciler — uses currentTurboRate() for full coverage
+       ============================================================ */
     function reconcileTurbo() {
       if (!turboActive) return;
-      if (!turboLastFrameTime || turboRateFramesPerSec <= 0) return;
+      if (!turboLastFrameTime || turboFrames <= 5) return;
 
       const now = Date.now();
       const elapsed = now - turboLastFrameTime;
-      if (elapsed < 500) return;
+      if (elapsed < 2000) return;
 
-      const missed = Math.floor((elapsed / 1000) * turboRateFramesPerSec) - 1;
+      const rate = currentTurboRate();
+      const missed = Math.floor((elapsed / 1000) * rate) - 1;
       if (missed <= 0) return;
 
       const actual = Math.min(missed, CATCHUP_CAP);
-      console.log("[Turbo] Wake reconcile: " + elapsed + "ms → " + actual + " frames");
+      console.log("[Turbo] Wake reconcile " + elapsed + "ms @ " + rate.toFixed(0) + "/sec → " + actual + " frames");
       applyTurboFrames(actual);
       turboFrames += actual;
       setTurboInfo("⚡ Caught up " + actual.toLocaleString("en-IN") + " missed Turbo frames.", false, true);
