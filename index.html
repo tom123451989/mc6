@@ -1,26 +1,1714 @@
-function turboMathTick() {
-  if (!turboActive) return;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Mantra Repetition Counter</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    :root { --bg: #fdfaf6; --text: #333; --primary: #ff9800; --accent: #fff3e0; }
+    body.dark { --bg: #1e1e1e; --text: #eee; --primary: #90caf9; --accent: #2c2c2c; }
+    body.sattvic { --bg: #fff7e6; --text: #5c3c00; --primary: #fbc02d; --accent: #fffde7; }
 
-  const now = Date.now();
+    body {
+      background: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif;
+      margin: 0; padding: 20px; text-align: center;
+      transition: background 0.3s, color 0.3s;
+    }
+    h1 { color: var(--primary); }
+    input, button, select {
+      font-size: 18px; padding: 10px; margin: 10px; border-radius: 10px;
+      border: none; outline: none; transition: box-shadow 0.3s;
+    }
+    input { width: 80%; max-width: 400px; background: var(--accent); }
+    button {
+      background: var(--primary); color: white; cursor: pointer;
+      font-size: 30px; padding: 30px 50px; min-width: 250px; margin: 20px 0;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+    #repeatBtn { font-size: 90px; padding: 90px 150px; }
+    #repeatBtn.turbo-locked {
+      background: #4caf50;
+      box-shadow: 0 0 25px rgba(76,175,80,0.7);
+      animation: pulse-glow 1.5s infinite;
+    }
+    #repeatBtn.normal-repeat-locked {
+      background: #2196F3;
+      box-shadow: 0 0 25px rgba(33,150,243,0.7);
+    }
+    @keyframes pulse-glow {
+      0%, 100% { box-shadow: 0 0 25px rgba(76,175,80,0.7); }
+      50% { box-shadow: 0 0 40px rgba(76,175,80,1); }
+    }
+    button:hover { box-shadow: 0 0 10px rgba(0,0,0,0.2); }
+    .counter { font-size: 48px; margin: 20px 0; font-weight: bold; }
+    .perceived { font-size: 48px; margin: 10px 0; font-weight: bold; color: var(--primary); }
+    .controls { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; }
+    .filter-section { margin: 20px 0; }
+    .theme-toggle { margin-top: 20px; }
+    .mantra-entry { margin-top: 20px; }
+    img.god-img { max-height: 100px; margin-top: 10px; }
 
-  // 🚀 FREEZE CHECK runs FIRST
-  if (turboLastFrameTime > 0 && turboRateFramesPerSec > 0) {
-    const gap = now - turboLastFrameTime;
-    if (gap > 500) {
-      const missed = Math.floor((gap / 1000) * turboRateFramesPerSec) - 1;
-      if (missed > 0) {
-        const actual = Math.min(missed, CATCHUP_CAP);
-        applyTurboFrames(actual);
-        turboFrames += actual;
-        setTurboInfo("⚡ Caught up " + actual.toLocaleString("en-IN") + " missed Turbo frames.", false, true);
+    #customKeyInput { width: 160px; text-align: center; cursor: pointer; }
+    #clearKeyBtn { font-size: 16px; padding: 8px 16px; min-width: auto; margin: 10px; }
+    .key-hint { font-size: 14px; opacity: 0.8; max-width: 420px; }
+
+    #auth-container { margin-bottom: 10px; }
+    #google-signin-btn {
+      font-size: 18px; padding: 12px 24px; min-width: auto;
+      background: #4285F4; border-radius: 8px; margin: 0 auto; display: inline-block;
+    }
+    #user-info {
+      display: none; align-items: center; justify-content: center;
+      gap: 12px; font-size: 18px; margin-top: 10px;
+    }
+    #signout-btn {
+      font-size: 14px; padding: 8px 16px; min-width: auto;
+      background: #f44336; border-radius: 8px; margin: 0;
+    }
+    #operationSelect { width: auto; background: var(--accent); font-weight: bold; color: var(--primary); }
+    #sync-status {
+      font-size: 13px; margin-top: 6px; min-height: 18px; color: #888;
+      transition: color 0.3s;
+    }
+    #sync-status.syncing { color: #ff9800; }
+    #sync-status.synced { color: #4caf50; }
+    #sync-status.error { color: #f44336; }
+
+    #turboBtn {
+      font-size: 22px !important;
+      padding: 15px 30px !important;
+      min-width: 240px !important;
+      margin: 10px !important;
+      background: #888;
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+    #turboBtn.on {
+      background: #4caf50;
+      box-shadow: 0 0 15px rgba(76,175,80,0.6);
+    }
+    #turboInfo {
+      font-size: 12px; color: #888; margin-top: 4px; min-height: 16px;
+      max-width: 420px;
+    }
+    #turboInfo.boosting {
+      color: #ff1744;
+      font-weight: bold;
+      font-size: 14px;
+    }
+    #turboInfo.catchup {
+      color: #2196F3;
+      font-weight: bold;
+      font-size: 14px;
+    }
+    #turboSpeedSelect, #turboBoostSelect {
+      width: auto; background: var(--accent); font-weight: bold;
+      color: var(--primary); font-size: 15px;
+    }
+    .rc-hint {
+      font-size: 12px; color: #888; margin-top: 4px;
+      max-width: 420px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Mantra Counter</h1>
+
+  <div id="auth-container">
+    <button id="google-signin-btn">Sign in with Google</button>
+    <div id="user-info">
+      <span id="user-name"></span>
+      <button id="signout-btn">Sign Out</button>
+    </div>
+    <div id="sync-status"></div>
+  </div>
+
+  <div class="mantra-entry">
+    <input type="text" id="mantraInput" placeholder="Enter Mantra">
+    <input type="file" id="godImageInput" accept="image/*">
+    <div><img id="godImage" class="god-img" alt="" /></div>
+    <button onclick="setMantra()">Set Mantra</button>
+    <button onclick="removeGodImage()">Remove God Picture</button>
+  </div>
+
+  <div>
+    <label for="historySelect">Or Load From History:</label><br>
+    <select id="historySelect">
+      <option value="">-- Select Mantra --</option>
+    </select>
+    <button onclick="loadSelectedMantra()">Load Selected Mantra</button>
+  </div>
+
+  <div id="currentMantra" style="font-size: 24px; margin: 10px 0;"></div>
+  <div class="counter" id="countDisplay">0</div>
+  <div class="perceived" id="perceivedCountDisplay"></div>
+
+  <div class="controls">
+    <button id="repeatBtn">Repeat</button>
+    <div class="rc-hint">💡 Right-click Repeat: toggle Turbo ↔ Normal auto-repeat</div>
+    <button onclick="resetCount()">Reset</button>
+    <button onclick="viewHistory()">History</button>
+
+    <label>
+      Repetitions per Press:
+      <input type="text" id="perPressInput" value="1" style="width: 120px;">
+    </label>
+
+    <label>
+      Operation:
+      <select id="operationSelect">
+        <option value="1">Standard (Add)</option>
+        <option value="2">Multiply (×)</option>
+        <option value="3">Exponentiation (^)</option>
+        <option value="4">Tetration (↑↑)</option>
+        <option value="5">Pentation (↑↑↑)</option>
+        <option value="6">Hexation (↑↑↑↑)</option>
+        <option value="7">Heptation (↑↑↑↑↑)</option>
+        <option value="8">Octation (↑↑↑↑↑↑)</option>
+        <option value="9">Nonation (↑↑↑↑↑↑↑)</option>
+        <option value="10">Decation (↑↑↑↑↑↑↑↑)</option>
+      </select>
+    </label>
+
+    <label>
+      Custom Number:
+      <input type="text" id="customNumberInput" placeholder="e.g. 1000 or ABC123">
+    </label>
+
+    <label>
+      Repetition Interval:
+      <select id="intervalSelect">
+        <option value="1000">1 sec</option>
+        <option value="500">0.5 sec</option>
+        <option value="100">0.1 sec</option>
+        <option value="50">0.05 sec</option>
+        <option value="25">0.025 sec</option>
+        <option value="13">0.0125 sec</option>
+        <option value="6">0.00625 sec</option>
+        <option value="3">0.003125 sec</option>
+        <option value="1">0.001 sec</option>
+        <option value="0.5">0.0005 sec</option>
+        <option value="0.25">0.00025 sec</option>
+        <option value="0.125">0.000125 sec</option>
+        <option value="0.0625">0.0000625 sec</option>
+        <option value="0.03125">0.00003125 sec</option>
+        <option value="0.015625">0.000015625 sec</option>
+        <option value="0.0078125">0.0000078125 sec</option>
+        <option value="0.00390625">0.00000390625 sec</option>
+      </select>
+    </label>
+
+    <button id="autoRepeatBtn" onclick="toggleAutoRepeat()">Start Auto Repeat</button>
+
+    <button id="turboBtn" onclick="toggleTurbo()">🚀 Turbo: OFF</button>
+    <label>
+      Turbo Speed:
+      <select id="turboSpeedSelect">
+        <option value="50000">Normal (50K/tick)</option>
+        <option value="500000">Fast (500K/tick)</option>
+        <option value="5000000">Extreme (5M/tick)</option>
+        <option value="50000000">Ludicrous (50M/tick)</option>
+        <option value="1000000000" selected>Insane (1B/tick)</option>
+        <option value="1000000000000">Godmode (1T/tick)</option>
+        <option value="googol">Googol (1e100/tick)</option>
+        <option value="googolplex">Googolplex (10^10^100/tick)</option>
+      </select>
+    </label>
+    <label>
+      Boost (while holding):
+      <select id="turboBoostSelect">
+        <option value="1">1× (no boost)</option>
+        <option value="5">5×</option>
+        <option value="10" selected>10×</option>
+        <option value="100">100×</option>
+        <option value="1000">1000×</option>
+        <option value="10000">10,000×</option>
+        <option value="100000">1 Lakh× (1,00,000)</option>
+        <option value="10000000">1 Crore× (1,00,00,000)</option>
+      </select>
+    </label>
+    <div id="turboInfo">Hold Enter (or custom key) to blast the counter.</div>
+
+    <label for="customKeyInput">
+      Custom Enter Key:
+      <input type="text" id="customKeyInput" readonly placeholder="Click here, then press a key">
+    </label>
+    <div class="key-hint">
+      Pressing that key will act as Enter (repeat the mantra). Press <b>Esc</b> inside the box to clear it.
+      <button id="clearKeyBtn" type="button" onclick="clearCustomKey()">Clear Key</button>
+    </div>
+  </div>
+
+  <div class="filter-section">
+    <input type="text" id="searchInput" placeholder="Search mantras...">
+    <br>
+    <label>From: <input type="date" id="fromDate"></label>
+    <label>To: <input type="date" id="toDate"></label>
+  </div>
+
+  <div class="theme-toggle">
+    <label>Theme:
+      <select id="themeSelect" onchange="setTheme(this.value)">
+        <option value="default">Light</option>
+        <option value="dark">Dark</option>
+        <option value="sattvic">Sattvic</option>
+      </select>
+    </label>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+    import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyC1FIXZDnttr109uumF0hl7kY-S6OWspaQ",
+      authDomain: "mantra-counter-12db9.firebaseapp.com",
+      projectId: "mantra-counter-12db9",
+      storageBucket: "mantra-counter-12db9.firebasestorage.app",
+      messagingSenderId: "270218360488",
+      appId: "1:270218360488:web:0634d5884a1386e930f49d",
+      measurementId: "G-0SHL1XG8LV"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    let count = { m: 0n, e: 0 };
+    let hyperState = null;
+    let currentMantra = "";
+    let currentMantraImg = "";
+    let customKey = "";
+    let currentUserId = null;
+    let saveTimeout = null;
+    let keyHoldTimer = null;
+    let pendingSave = false;
+    let autoRepeatUsingTurbo = false;
+
+    let turboEnabled = false;
+    let turboActive = false;
+    let turboMathTimer = null;
+    let turboDisplayRAF = null;
+    let turboReps = null;
+    let turboMode = 1;
+    let turboHyper = false;
+    let turboFrames = 0;
+    let turboStartedAt = 0;
+    let turboBatch = 1000000000;
+    let turboBatchSci = null;
+    let turboBatchAddend = null;
+    let turboBatchMultiplier = null;
+
+    let turboBoostFactor = 10;
+    let turboBoostActive = false;
+    let turboBoostedBatchSci = null;
+    let turboBoostedAddend = null;
+    let turboBoostedMultiplier = null;
+    let keyStartedTurbo = false;
+    let rightClickBoostLock = false;
+
+    // 🚀 Turbo wall-clock reconciliation
+    let turboRateFramesPerSec = 0;
+    let turboRateSampleStart = 0;
+    let turboRateSampleFrames = 0;
+    let turboLastFrameTime = 0;
+
+    // ⏱️ Normal Auto-Repeat wall-clock state
+    let autoRepeatState = null;
+    let autoRepeatTimer = null;
+    let autoRepeatApplied = 0;
+    let lastPersistAt = 0;
+
+    const MAX_SAFE_EXP = 9007199254740991;
+    const MAX_ABSORB_EXP = 100000;
+    const CATCHUP_CAP = 1000000;
+
+    function bigZero() { return { m: 0n, e: 0 }; }
+
+    function bigNormalize(x) {
+      let m = x.m, e = x.e;
+      if (m === 0n) return { m: 0n, e: 0 };
+      if (Math.abs(e) > MAX_SAFE_EXP) return { m: m, e: e };
+      while (m % 10n === 0n) { m = m / 10n; e += 1; }
+      return { m: m, e: e };
+    }
+
+    function bigFromString(str) {
+      if (str === null || str === undefined) return null;
+      let s = String(str).replace(/\s+/g, "");
+      if (!s) return null;
+      s = s.replace(/\^/g, "e");
+      const m = s.match(/^([+-]?)(\d+\.?\d*|\.\d+)(?:[eE]([+-]?\d+))?$/);
+      if (!m) return null;
+      const sign = m[1] === "-" ? -1n : 1n;
+      let mantStr = m[2];
+      let exp = m[3] ? parseInt(m[3], 10) : 0;
+      if (isNaN(exp)) return null;
+      const dot = mantStr.indexOf(".");
+      if (dot >= 0) {
+        exp -= (mantStr.length - dot - 1);
+        mantStr = mantStr.slice(0, dot) + mantStr.slice(dot + 1);
+      }
+      mantStr = mantStr.replace(/^0+/, "") || "0";
+      return bigNormalize({ m: BigInt(mantStr) * sign, e: exp });
+    }
+
+    function bigFromNumber(n) {
+      if (!isFinite(n)) return null;
+      return bigFromString(String(n));
+    }
+
+    function toBig(x) {
+      if (x === null || x === undefined) return bigZero();
+      if (typeof x === "object" && typeof x.m === "bigint" && typeof x.e === "number") return x;
+      if (typeof x === "bigint") return bigNormalize({ m: x, e: 0 });
+      if (typeof x === "number") return bigFromNumber(x) || bigZero();
+      return bigFromString(String(x)) || bigZero();
+    }
+
+    function bigMul(a, b) {
+      a = toBig(a); b = toBig(b);
+      const aHuge = Math.abs(a.e) > MAX_SAFE_EXP;
+      const bHuge = Math.abs(b.e) > MAX_SAFE_EXP;
+
+      if (aHuge || bHuge) {
+        if (aHuge && bHuge) {
+          const newE = a.e + b.e;
+          if (isFinite(newE)) {
+            return bigNormalize({ m: a.m * b.m, e: newE });
+          }
+          return bigNormalize({ m: a.m * b.m, e: a.e });
+        }
+        const huge = aHuge ? a : b;
+        const small = aHuge ? b : a;
+        if (small.e >= 0 && small.e < MAX_ABSORB_EXP) {
+          const absorbed = small.m * (10n ** BigInt(Math.round(small.e)));
+          return bigNormalize({ m: huge.m * absorbed, e: huge.e });
+        }
+        return bigNormalize({ m: huge.m * small.m, e: huge.e });
+      }
+
+      return bigNormalize({ m: a.m * b.m, e: a.e + b.e });
+    }
+
+    function bigAdd(a, b) {
+      a = toBig(a); b = toBig(b);
+      if (a.m === 0n) return { m: b.m, e: b.e };
+      if (b.m === 0n) return { m: a.m, e: a.e };
+      const e = Math.min(a.e, b.e);
+      const diffA = a.e - e;
+      const diffB = b.e - e;
+      if (diffA > 30) return { m: a.m, e: a.e };
+      if (diffB > 30) return { m: b.m, e: b.e };
+      const am = a.m * (10n ** BigInt(diffA));
+      const bm = b.m * (10n ** BigInt(diffB));
+      return bigNormalize({ m: am + bm, e: e });
+    }
+
+    function bigIsZero(a) { return toBig(a).m === 0n; }
+
+    function bigToNumber(a) {
+      a = toBig(a);
+      if (a.m === 0n) return 0;
+      return Number(bigToDisplay(a));
+    }
+
+    function bigToDisplay(a) {
+      a = toBig(a);
+      if (a.m === 0n) return "0";
+      const neg = a.m < 0n;
+      const mantAbs = neg ? -a.m : a.m;
+      const mantStr = mantAbs.toString();
+      const digits = mantStr.length;
+      const exp = a.e;
+      const sciExp = digits - 1 + exp;
+
+      if (Math.abs(exp) > MAX_SAFE_EXP) {
+        let mantDisplay;
+        if (digits <= 15) {
+          mantDisplay = mantStr;
+        } else {
+          mantDisplay = mantStr[0] + "." + mantStr.slice(1, 15) + "e+" + (digits - 1);
+        }
+        const log10 = Math.log10(Math.abs(exp));
+        const isPower10 = Math.abs(log10 - Math.round(log10)) < 1e-9;
+        let expDisplay;
+        if (isPower10) expDisplay = "10^" + Math.round(log10);
+        else expDisplay = Math.abs(exp).toExponential(2);
+        return (neg ? "-" : "") + mantDisplay + " × 10^" + (exp < 0 ? "-" : "") + expDisplay;
+      }
+
+      let flatLen;
+      if (sciExp < 0) flatLen = digits - sciExp + 1;
+      else flatLen = sciExp + 1;
+
+      if (sciExp >= -5 && sciExp < 15 && flatLen <= 13) {
+        const pointPos = digits + exp;
+        if (pointPos >= digits) return (neg ? "-" : "") + mantStr + "0".repeat(exp);
+        if (pointPos > 0) return (neg ? "-" : "") + mantStr.slice(0, pointPos) + "." + mantStr.slice(pointPos);
+        return (neg ? "-" : "") + "0." + "0".repeat(-pointPos) + mantStr;
+      }
+
+      const maxMantDigits = 15;
+      let mantDisplay;
+      if (digits === 1) mantDisplay = mantStr;
+      else if (digits <= maxMantDigits) mantDisplay = mantStr[0] + "." + mantStr.slice(1);
+      else mantDisplay = mantStr[0] + "." + mantStr.slice(1, maxMantDigits);
+
+      if (Math.abs(sciExp) < 1e6) {
+        return (neg ? "-" : "") + mantDisplay + "e" + (sciExp >= 0 ? "+" : "") + sciExp;
+      }
+
+      const log10 = Math.log10(Math.abs(sciExp));
+      const isPower10 = Math.abs(log10 - Math.round(log10)) < 1e-9;
+      let expDisplay;
+      if (isPower10) expDisplay = "10^" + Math.round(log10);
+      else expDisplay = Math.abs(sciExp).toExponential(2);
+      return (neg ? "-" : "") + mantDisplay + "×10^" + (sciExp < 0 ? "-" : "") + expDisplay;
+    }
+
+    function bigToStorage(a) {
+      const s = bigToDisplay(a);
+      const n = Number(s);
+      if (Number.isFinite(n) && Math.abs(n) < 9007199254740992) return n;
+      return s;
+    }
+
+    function bigPow(base, exp) {
+      if (exp <= 0) return { m: 1n, e: 0 };
+      if (exp > 100000) exp = 100000;
+      let result = { m: 1n, e: 0 };
+      let b = toBig(base);
+      let e = exp;
+      while (e > 0) {
+        if (e & 1) result = bigMul(result, b);
+        b = bigMul(b, b);
+        e >>= 1;
+      }
+      return result;
+    }
+
+    function parseNumberExpression(raw) {
+      const s = String(raw == null ? "" : raw).trim();
+      if (!s) return null;
+      if (s.indexOf("^") !== -1) {
+        const parts = s.split("^");
+        if (parts.length !== 2) return null;
+        const base = bigFromString(parts[0].trim());
+        const expBig = bigFromString(parts[1].trim());
+        if (!base || !expBig) return null;
+        if (expBig.e < 0) return null;
+        const expNum = bigToNumber(expBig);
+        if (!Number.isFinite(expNum) || expNum < 0) return null;
+        if (Math.floor(expNum) !== expNum) return null;
+        if (expNum > 100000) return null;
+        return bigNormalize({ m: base.m ** BigInt(expNum), e: base.e * expNum });
+      }
+      return bigFromString(s);
+    }
+
+    function parseRepetitionValue(raw) {
+      const s = String(raw == null ? "" : raw).trim();
+      if (!s) return { sci: bigFromNumber(1), num: 1, scientific: false };
+      const stripped = s.replace(/\s+/g, "");
+      const looksScientific = stripped.indexOf("^") !== -1 || /[eE][+-]?\d+/.test(stripped);
+      let v = parseNumberExpression(s);
+      if (!v) return { sci: bigFromNumber(1), num: 1, scientific: false };
+      let num = bigToNumber(v);
+      if (!(num >= 1)) { v = bigFromNumber(1); num = 1; }
+      const scientific = looksScientific || (Number.isFinite(num) && Math.abs(num) >= 1e15);
+      return { sci: v, num: num, scientific: scientific };
+    }
+
+    function iterAsSci(iter) {
+      if (iter === null || iter === undefined) return { m: 0n, e: 0 };
+      if (typeof iter === "object" && typeof iter.m === "bigint") return iter;
+      if (typeof iter === "number") return bigFromNumber(iter) || { m: 0n, e: 0 };
+      return bigFromString(String(iter)) || { m: 0n, e: 0 };
+    }
+    function iterDisplay(iter) {
+      if (typeof iter === "number") return String(iter);
+      return bigToDisplay(iter);
+    }
+    function iterAdd(iter, amountSci) {
+      const a = iterAsSci(iter);
+      const b = toBig(amountSci);
+      const aHuge = Math.abs(a.e) > MAX_SAFE_EXP;
+      const bHuge = Math.abs(b.e) > MAX_SAFE_EXP;
+      let result;
+      if (aHuge && !bHuge) {
+        if (b.e >= 0 && b.e < MAX_ABSORB_EXP) {
+          const bMant = b.m * (10n ** BigInt(Math.round(b.e)));
+          result = { m: a.m + bMant, e: a.e };
+        } else {
+          result = bigAdd(a, b);
+        }
+      } else if (bHuge && !aHuge) {
+        result = b;
+      } else if (aHuge && bHuge) {
+        const expDiff = Math.abs(a.e - b.e);
+        const expScale = Math.max(Math.abs(a.e), 1);
+        if (expDiff / expScale < 1e-6) {
+          result = { m: a.m + b.m, e: a.e };
+        } else {
+          result = a;
+        }
+      } else {
+        result = bigAdd(a, b);
+      }
+      if (typeof iter === "number" && result.e >= 0 && result.e < 15) {
+        const n = Number(result.m) * Math.pow(10, result.e);
+        if (Number.isSafeInteger(n) && Math.abs(n) < 1e15) return n;
+      }
+      return result;
+    }
+
+    function iterToString(iter) {
+      if (typeof iter === "number") return { type: "num", val: iter };
+      if (iter && typeof iter === "object" && typeof iter.m === "bigint") {
+        return { type: "sci", m: iter.m.toString(), e: iter.e };
+      }
+      return { type: "num", val: 0 };
+    }
+    function iterFromString(data) {
+      if (!data) return 0;
+      if (data.type === "num") return data.val;
+      if (data.type === "sci") return { m: BigInt(data.m), e: data.e };
+      return 0;
+    }
+
+    function sanitizeHyperState(state) {
+      if (!state) return null;
+      return { base: state.base, op: state.op, iter: iterToString(state.iter) };
+    }
+    function restoreHyperState(data) {
+      if (!data) return null;
+      return { base: data.base, op: data.op, iter: data.iter ? iterFromString(data.iter) : 0 };
+    }
+
+    function lsGet(key, fallback) {
+      try { const v = localStorage.getItem(key); return v === null ? fallback : v; }
+      catch (e) { return fallback; }
+    }
+    function lsSet(key, value) {
+      try { localStorage.setItem(key, value); } catch (e) { }
+    }
+    function lsRemove(key) {
+      try { localStorage.removeItem(key); } catch (e) { }
+    }
+    function loadHistory() {
+      try {
+        const parsed = JSON.parse(lsGet("mantraHistory", "[]"));
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e) { return []; }
+    }
+
+    function updateSyncStatus(state, message) {
+      const el = document.getElementById("sync-status");
+      if (!el) return;
+      el.className = "";
+      if (state) el.classList.add(state);
+      el.textContent = message || "";
+    }
+
+    function setTurboInfo(message, boosting, catchup) {
+      const info = document.getElementById("turboInfo");
+      if (!info) return;
+      info.textContent = message;
+      info.classList.remove("boosting", "catchup");
+      if (boosting) info.classList.add("boosting");
+      if (catchup) info.classList.add("catchup");
+    }
+
+    function setRepeatButtonTurboLock(on) {
+      const btn = document.getElementById("repeatBtn");
+      if (!btn) return;
+      if (on) btn.classList.add("turbo-locked");
+      else btn.classList.remove("turbo-locked");
+    }
+
+    function setRepeatButtonNormalLock(on) {
+      const btn = document.getElementById("repeatBtn");
+      if (!btn) return;
+      if (on) btn.classList.add("normal-repeat-locked");
+      else btn.classList.remove("normal-repeat-locked");
+    }
+
+    function formatHyper(state) {
+      if (!state) return "";
+      const op = state.op, base = state.base;
+      const iterStr = iterDisplay(state.iter);
+      if (op === 3) return base + " ^ " + iterStr;
+      return base + " " + "↑".repeat(op - 2) + " " + iterStr;
+    }
+
+    function setMantra() {
+      const inputEl = document.getElementById("mantraInput");
+      const input = (inputEl && inputEl.value ? inputEl.value : "").trim();
+      if (!input) return;
+      currentMantra = input;
+      count = bigZero();
+      hyperState = null;
+      document.getElementById("currentMantra").textContent = 'Current: "' + input + '"';
+      updateDisplay();
+      storeMantra(input);
+      storeCount(currentMantra, count);
+      saveDataToCloud();
+    }
+
+    function applySilentTick(op, raw, reps) {
+      if (op >= 3) {
+        if (!hyperState || hyperState.base !== raw || hyperState.op !== op) {
+          hyperState = { base: raw, op: op, iter: 1 };
+        } else {
+          hyperState.iter = iterAdd(hyperState.iter, { m: 1n, e: 0 });
+        }
+        count = bigZero();
+        return;
+      }
+      hyperState = null;
+      count = toBig(count);
+      if (op === 2) count = bigMul(count, reps);
+      else count = bigAdd(count, reps);
+    }
+
+    function repeatMantra() {
+      if (!currentMantra) return;
+      const op = parseInt(document.getElementById("operationSelect").value) || 1;
+      const raw = document.getElementById("perPressInput").value || "1";
+      const parsed = parseRepetitionValue(raw);
+      const reps = parsed.sci;
+
+      applySilentTick(op, raw, reps);
+
+      updateDisplay();
+      storeCount(currentMantra, count);
+      const dailyAmount = Number.isFinite(parsed.num) ? parsed.num : 1;
+      storeDailyCount(currentMantra, dailyAmount);
+      if (navigator.vibrate) navigator.vibrate(50);
+      lsSet("perPressValue", raw);
+      scheduleCloudSave();
+    }
+
+    /* ============================================================
+       ⏱️ WALL-CLOCK NORMAL AUTO REPEAT
+       ============================================================ */
+    function startNormalAutoRepeat() {
+      stopNormalAutoRepeat();
+
+      const intervalMs = parseFloat(document.getElementById("intervalSelect").value) || 1000;
+      const op = parseInt(document.getElementById("operationSelect").value) || 1;
+      const raw = document.getElementById("perPressInput").value || "1";
+
+      autoRepeatState = {
+        startedAt: Date.now(),
+        intervalMs: intervalMs,
+        op: op,
+        raw: raw,
+        currentMantra: currentMantra
+      };
+      autoRepeatApplied = 0;
+      lsSet("autoRepeatState", JSON.stringify(autoRepeatState));
+
+      autoRepeatTimer = setInterval(reconcileAutoRepeat, 100);
+      reconcileAutoRepeat();
+      console.log("[AutoRepeat] Started — interval " + intervalMs + "ms, op " + op);
+    }
+
+    function reconcileAutoRepeat() {
+      if (!autoRepeatState) return;
+      const elapsed = Date.now() - autoRepeatState.startedAt;
+      const expectedTicks = Math.floor(elapsed / autoRepeatState.intervalMs);
+      const missed = expectedTicks - autoRepeatApplied;
+      if (missed <= 0) return;
+
+      const actual = Math.min(missed, CATCHUP_CAP);
+      applyBatchTicks(actual);
+      autoRepeatApplied = expectedTicks;
+
+      if (missed > 5) {
+        setTurboInfo("⚡ Caught up " + actual.toLocaleString("en-IN") + " missed ticks after screen was off.", false, true);
       }
     }
-  }
 
-  // ... do the increment ...
-  turboFrames++;
+    function applyBatchTicks(n) {
+      if (!autoRepeatState || n <= 0) return;
+      const op = autoRepeatState.op;
+      const raw = autoRepeatState.raw;
+      const parsed = parseRepetitionValue(raw);
+      const reps = parsed.sci;
 
-  // Update timestamp AFTER the freeze check
-  turboLastFrameTime = now;
-  // ...
-}
+      if (op >= 3) {
+        if (!hyperState || hyperState.base !== raw || hyperState.op !== op) {
+          hyperState = { base: raw, op: op, iter: 0 };
+        }
+        hyperState.iter = iterAdd(hyperState.iter, bigFromNumber(n));
+        count = bigZero();
+      } else if (op === 2) {
+        const exp = Math.min(n, 100000);
+        const mult = bigPow(reps, exp);
+        count = bigMul(count, mult);
+        hyperState = null;
+      } else {
+        const totalAdd = bigMul(reps, bigFromNumber(n));
+        count = bigAdd(count, totalAdd);
+        hyperState = null;
+      }
+
+      updateDisplay();
+
+      const now = Date.now();
+      if (now - lastPersistAt > 2000 || n > 10) {
+        if (currentMantra) storeCount(currentMantra, count);
+        if (currentUserId && currentMantra) scheduleCloudSave();
+        lastPersistAt = now;
+      }
+    }
+
+    function stopNormalAutoRepeat() {
+      if (autoRepeatTimer !== null) {
+        clearInterval(autoRepeatTimer);
+        autoRepeatTimer = null;
+      }
+      if (autoRepeatState) {
+        try { reconcileAutoRepeat(); } catch (e) { }
+        autoRepeatState = null;
+        autoRepeatApplied = 0;
+        lsRemove("autoRepeatState");
+        console.log("[AutoRepeat] Stopped");
+      }
+    }
+
+    function stopAllAutoRepeat() {
+      stopNormalAutoRepeat();
+      autoRepeatUsingTurbo = false;
+      rightClickBoostLock = false;
+      turboBoostActive = false;
+      setRepeatButtonTurboLock(false);
+      setRepeatButtonNormalLock(false);
+      if (turboActive) stopTurbo();
+    }
+
+    function resumeAutoRepeatIfNeeded() {
+      const raw = lsGet("autoRepeatState", "");
+      if (!raw) return false;
+      try {
+        const saved = JSON.parse(raw);
+        if (!saved || !saved.startedAt) return false;
+        autoRepeatState = saved;
+        autoRepeatApplied = 0;
+        lastPersistAt = 0;
+        autoRepeatTimer = setInterval(reconcileAutoRepeat, 100);
+        reconcileAutoRepeat();
+        document.getElementById("autoRepeatBtn").textContent = "Stop Auto Repeat";
+        setRepeatButtonNormalLock(true);
+        console.log("[AutoRepeat] Resumed from saved state (started " +
+          Math.round((Date.now() - saved.startedAt) / 1000) + "s ago)");
+        return true;
+      } catch (e) {
+        console.error("[AutoRepeat] Resume failed:", e);
+        return false;
+      }
+    }
+
+    function toggleAutoRepeat() {
+      const button = document.getElementById("autoRepeatBtn");
+      const isRunning = (autoRepeatTimer !== null) || autoRepeatUsingTurbo;
+
+      if (isRunning) {
+        stopAllAutoRepeat();
+        button.textContent = "Start Auto Repeat";
+      } else {
+        if (!currentMantra) {
+          setTurboInfo("Set a mantra first.", false);
+          return;
+        }
+        if (turboEnabled) {
+          autoRepeatUsingTurbo = true;
+          startTurbo();
+          setTurboInfo("🚀 Auto Repeat running in Turbo mode. Hold Enter for " + turboBoostFactor.toLocaleString("en-IN") + "× boost.", false);
+          setRepeatButtonTurboLock(true);
+          setRepeatButtonNormalLock(false);
+        } else {
+          startNormalAutoRepeat();
+          setRepeatButtonNormalLock(true);
+          setRepeatButtonTurboLock(false);
+        }
+        button.textContent = "Stop Auto Repeat";
+      }
+    }
+
+    function resetCount() {
+      if (autoRepeatState) {
+        autoRepeatState.startedAt = Date.now();
+        autoRepeatApplied = 0;
+        lsSet("autoRepeatState", JSON.stringify(autoRepeatState));
+      }
+      count = bigZero();
+      hyperState = null;
+      updateDisplay();
+      if (currentMantra) storeCount(currentMantra, count);
+      saveDataToCloud();
+    }
+
+    function updateDisplay() {
+      count = toBig(count);
+      const countEl = document.getElementById("countDisplay");
+      const perceivedEl = document.getElementById("perceivedCountDisplay");
+      const customNumberInput = document.getElementById("customNumberInput");
+      const customNumber = customNumberInput ? customNumberInput.value.trim() : "";
+
+      let baseDisplay;
+      if (hyperState) baseDisplay = formatHyper(hyperState);
+      else baseDisplay = bigToDisplay(count);
+      countEl.textContent = baseDisplay;
+
+      if (customNumber) {
+        perceivedEl.textContent = "Counts Done: " + baseDisplay + " × " + customNumber;
+      } else {
+        perceivedEl.textContent = "Counts Done: " + baseDisplay;
+      }
+    }
+
+    function storeMantra(text) {
+      const history = loadHistory();
+      if (!history.find(m => m && m.text === text)) {
+        history.push({ text: text, count: 0 });
+        lsSet("mantraHistory", JSON.stringify(history));
+        populateHistoryDropdown();
+      }
+    }
+    function storeCount(text, cnt) {
+      const history = loadHistory();
+      const mantra = history.find(m => m && m.text === text);
+      if (mantra) {
+        mantra.count = hyperState ? formatHyper(hyperState) : bigToStorage(toBig(cnt));
+        lsSet("mantraHistory", JSON.stringify(history));
+      }
+    }
+    function storeDailyCount(text, amount) {
+      amount = amount || 1;
+      if (!Number.isFinite(amount) || Math.abs(amount) > 1e15) amount = 1e15;
+      const today = new Date().toISOString().split("T")[0];
+      const key = "mantraDailyCounts_" + text;
+      let data = {};
+      try { data = JSON.parse(lsGet(key, "{}")) || {}; } catch (e) { data = {}; }
+      if (typeof data !== "object" || data === null) data = {};
+      data[today] = (data[today] || 0) + amount;
+      lsSet(key, JSON.stringify(data));
+    }
+    function populateHistoryDropdown() {
+      const select = document.getElementById("historySelect");
+      select.innerHTML = '<option value="">-- Select Mantra --</option>';
+      const history = loadHistory();
+      history.forEach(m => {
+        if (!m || typeof m.text === "undefined") return;
+        const option = document.createElement("option");
+        option.value = m.text;
+        option.textContent = m.text + " (" + m.count + ")";
+        select.appendChild(option);
+      });
+    }
+    function loadSelectedMantra() {
+      const selected = document.getElementById("historySelect").value;
+      if (!selected) return;
+      currentMantra = selected;
+      const history = loadHistory();
+      const mantra = history.find(m => m && m.text === selected);
+      const stored = mantra ? mantra.count : 0;
+      if (typeof stored === "string" && (stored.includes("↑") || stored.includes("^"))) {
+        const parts = stored.split(" ");
+        if (parts.length === 3) {
+          const base = parts[0], symbol = parts[1], iterRaw = parts[2];
+          let op = 3;
+          if (symbol === "^") op = 3;
+          else if (symbol === "↑↑") op = 4;
+          else if (symbol === "↑↑↑") op = 5;
+          else if (symbol === "↑↑↑↑") op = 6;
+          else if (symbol === "↑↑↑↑↑") op = 7;
+          else if (symbol === "↑↑↑↑↑↑") op = 8;
+          else if (symbol === "↑↑↑↑↑↑↑") op = 9;
+          else if (symbol === "↑↑↑↑↑↑↑↑") op = 10;
+          let iter;
+          if (/[eE]/.test(iterRaw) || iterRaw.includes("×")) {
+            iter = bigFromString(iterRaw.replace(/×10\^\(?([^)]*)\)?/, "")) || 0;
+          } else {
+            iter = parseInt(iterRaw, 10) || 0;
+          }
+          hyperState = { base: base, op: op, iter: iter };
+          count = bigZero();
+        } else { hyperState = null; count = bigZero(); }
+      } else {
+        hyperState = null;
+        count = toBig(stored);
+      }
+      document.getElementById("currentMantra").textContent = 'Current: "' + currentMantra + '"';
+      updateDisplay();
+      saveDataToCloud();
+    }
+
+    document.getElementById("godImageInput").addEventListener("change", function(e) {
+      const file = e.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          document.getElementById("godImage").src = reader.result;
+          currentMantraImg = reader.result;
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+    function removeGodImage() {
+      document.getElementById("godImage").src = "";
+      currentMantraImg = "";
+    }
+
+    function setTheme(theme) {
+      document.body.classList.remove("dark", "sattvic");
+      if (theme !== "default") document.body.classList.add(theme);
+      lsSet("theme", theme);
+    }
+    function loadTheme() {
+      const saved = lsGet("theme", "");
+      if (saved) {
+        document.getElementById("themeSelect").value = saved;
+        setTheme(saved);
+      }
+    }
+    function viewHistory() { window.location.href = "history.html"; }
+
+    function loadSavedRepetitionPerPress() {
+      const saved = lsGet("perPressValue", "");
+      if (saved) document.getElementById("perPressInput").value = saved;
+    }
+    function loadSavedCustomNumber() {
+      const saved = lsGet("customNumberValue", "");
+      if (saved) document.getElementById("customNumberInput").value = saved;
+      updateDisplay();
+    }
+    function loadSavedOperation() {
+      const saved = lsGet("operationValue", "1");
+      document.getElementById("operationSelect").value = saved;
+    }
+
+    function applyTurboSpeed(value) {
+      if (value === "googolplex") {
+        turboBatchSci = { m: 1n, e: 1e100 };
+        turboBatch = 1e100;
+      } else if (value === "googol") {
+        turboBatchSci = { m: 1n, e: 100 };
+        turboBatch = 1e100;
+      } else {
+        turboBatch = Number(value) || 1000000000;
+        turboBatchSci = null;
+      }
+    }
+    function loadSavedTurboSpeed() {
+      const saved = lsGet("turboSpeedValue", "1000000000");
+      const select = document.getElementById("turboSpeedSelect");
+      const validOption = Array.from(select.options).some(o => o.value === saved);
+      const chosen = validOption ? saved : "1000000000";
+      select.value = chosen;
+      applyTurboSpeed(chosen);
+    }
+    function loadSavedBoost() {
+      const saved = lsGet("turboBoostValue", "10");
+      const select = document.getElementById("turboBoostSelect");
+      const validOption = Array.from(select.options).some(o => o.value === saved);
+      const chosen = validOption ? saved : "10";
+      select.value = chosen;
+      turboBoostFactor = parseInt(chosen) || 10;
+    }
+
+    document.getElementById("customNumberInput").addEventListener("input", function() {
+      lsSet("customNumberValue", this.value.trim());
+      updateDisplay();
+      scheduleCloudSave();
+    });
+    document.getElementById("perPressInput").addEventListener("input", function() {
+      lsSet("perPressValue", this.value.trim());
+      scheduleCloudSave();
+    });
+    document.getElementById("operationSelect").addEventListener("change", function() {
+      lsSet("operationValue", this.value);
+      hyperState = null;
+      count = bigZero();
+      updateDisplay();
+      saveDataToCloud();
+    });
+    document.getElementById("turboSpeedSelect").addEventListener("change", function() {
+      applyTurboSpeed(this.value);
+      lsSet("turboSpeedValue", this.value);
+      if (turboActive) computeBoostedValues();
+    });
+    document.getElementById("turboBoostSelect").addEventListener("change", function() {
+      turboBoostFactor = parseInt(this.value) || 10;
+      lsSet("turboBoostValue", this.value);
+      if (turboActive) computeBoostedValues();
+      if (turboBoostActive) {
+        setTurboInfo("🚀 BOOST ×" + turboBoostFactor.toLocaleString("en-IN") + " ACTIVE — release key to stop boost.", true);
+      }
+    });
+
+    function keyDisplayName(key) {
+      if (key === " ") return "Space";
+      if (key === "Enter") return "Enter";
+      return key;
+    }
+    function setCustomKey(key) {
+      customKey = key || "";
+      const input = document.getElementById("customKeyInput");
+      if (customKey) {
+        input.value = keyDisplayName(customKey);
+        lsSet("customKeyMapping", customKey);
+      } else {
+        input.value = "";
+        lsRemove("customKeyMapping");
+      }
+    }
+    function clearCustomKey() { setCustomKey(""); }
+
+    document.getElementById("customKeyInput").addEventListener("keydown", function(e) {
+      if (e.key === "Tab") return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") { setCustomKey(""); return; }
+      setCustomKey(e.key);
+    });
+
+    function startKeyHold() {
+      if (keyHoldTimer !== null) return;
+      repeatMantra();
+      keyHoldTimer = setInterval(repeatMantra, 0);
+    }
+    function stopKeyHold() {
+      if (keyHoldTimer !== null) {
+        clearInterval(keyHoldTimer);
+        keyHoldTimer = null;
+      }
+    }
+
+    function toggleTurbo() {
+      turboEnabled = !turboEnabled;
+      const btn = document.getElementById("turboBtn");
+      const autoBtn = document.getElementById("autoRepeatBtn");
+      if (turboEnabled) {
+        btn.textContent = "🚀 Turbo: ON";
+        btn.classList.add("on");
+        setTurboInfo("Turbo ON — hold Enter/custom key to blast the counter.", false);
+      } else {
+        btn.textContent = "🚀 Turbo: OFF";
+        btn.classList.remove("on");
+        setTurboInfo("Hold Enter (or custom key) to blast the counter.", false);
+        if (autoRepeatUsingTurbo) {
+          autoRepeatUsingTurbo = false;
+          autoBtn.textContent = "Start Auto Repeat";
+        }
+        rightClickBoostLock = false;
+        turboBoostActive = false;
+        setRepeatButtonTurboLock(false);
+        if (turboActive) stopTurbo();
+      }
+    }
+
+    function prepareTurbo() {
+      const op = parseInt(document.getElementById("operationSelect").value) || 1;
+      const raw = document.getElementById("perPressInput").value || "1";
+
+      if (op >= 3) {
+        turboHyper = true;
+        if (!hyperState || hyperState.base !== raw || hyperState.op !== op) {
+          hyperState = { base: raw, op: op, iter: 0 };
+        }
+      } else {
+        turboHyper = false;
+        turboMode = op;
+        const parsed = parseRepetitionValue(raw);
+        turboReps = parsed.sci;
+        count = toBig(count);
+      }
+
+      if (turboHyper) {
+        turboBatchAddend = null;
+        turboBatchMultiplier = null;
+      } else if (op === 2) {
+        turboBatchMultiplier = bigPow(turboReps, 100);
+        turboBatchAddend = null;
+      } else {
+        const batchSci = turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 9 };
+        turboBatchAddend = bigMul(turboReps, batchSci);
+        turboBatchMultiplier = null;
+      }
+      computeBoostedValues();
+    }
+
+    function computeBoostedValues() {
+      turboBoostedBatchSci = null;
+      turboBoostedAddend = null;
+      turboBoostedMultiplier = null;
+      if (turboBoostFactor <= 1) return;
+      if (turboHyper) {
+        const batchSci = turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 0 };
+        turboBoostedBatchSci = bigMul(batchSci, bigFromNumber(turboBoostFactor));
+      } else if (turboMode === 2) {
+        const exp = Math.min(100 * Math.max(turboBoostFactor, 1), 100000);
+        turboBoostedMultiplier = bigPow(turboReps, exp);
+      } else {
+        const batchSci = turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 9 };
+        const boostedBatch = bigMul(batchSci, bigFromNumber(turboBoostFactor));
+        turboBoostedAddend = bigMul(turboReps, boostedBatch);
+      }
+    }
+
+    function startTurbo() {
+      if (turboActive) return;
+      if (!currentMantra) return;
+      turboActive = true;
+      turboFrames = 0;
+      turboStartedAt = performance.now();
+      turboRateFramesPerSec = 0;
+      turboRateSampleStart = 0;
+      turboRateSampleFrames = 0;
+      turboLastFrameTime = Date.now();
+      applyTurboSpeed(document.getElementById("turboSpeedSelect").value);
+      prepareTurbo();
+      turboMathTick();
+      turboDisplayLoop();
+    }
+
+    function stopTurbo() {
+      turboActive = false;
+      turboBoostActive = false;
+      keyStartedTurbo = false;
+      if (turboMathTimer !== null) {
+        clearTimeout(turboMathTimer);
+        turboMathTimer = null;
+      }
+      if (turboDisplayRAF !== null) {
+        cancelAnimationFrame(turboDisplayRAF);
+        turboDisplayRAF = null;
+      }
+      if (currentMantra) {
+        storeCount(currentMantra, count);
+        if (hyperState) {
+          const dailyInc = Math.min(turboFrames * Math.min(turboBatch, 1e10), 1e15);
+          storeDailyCount(currentMantra, dailyInc);
+        }
+      }
+      if (currentUserId && currentMantra) {
+        scheduleCloudSave();
+      }
+      const elapsed = ((performance.now() - turboStartedAt) / 1000).toFixed(1);
+      setTurboInfo("🚀 Turbo burst: " + elapsed + " sec — "
+        + (hyperState ? formatHyper(hyperState) : bigToDisplay(count)), false);
+    }
+
+    function applyTurboFrames(n) {
+      if (n <= 0) return;
+      if (turboHyper) {
+        const batchSci = (turboBoostActive && turboBoostedBatchSci)
+          ? turboBoostedBatchSci
+          : (turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 0 });
+        const total = bigMul(batchSci, bigFromNumber(n));
+        hyperState.iter = iterAdd(hyperState.iter, total);
+      } else if (turboMode === 2) {
+        const mult = (turboBoostActive && turboBoostedMultiplier)
+          ? turboBoostedMultiplier
+          : turboBatchMultiplier;
+        if (mult) {
+          const exp = Math.min(n, 100000);
+          const combined = bigPow(mult, exp);
+          count = bigMul(count, combined);
+        }
+      } else {
+        const addend = (turboBoostActive && turboBoostedAddend)
+          ? turboBoostedAddend
+          : turboBatchAddend;
+        if (addend) {
+          const total = bigMul(addend, bigFromNumber(n));
+          count = bigAdd(count, total);
+        }
+      }
+      updateDisplay();
+      if (currentMantra) storeCount(currentMantra, count);
+      if (currentUserId && currentMantra) scheduleCloudSave();
+    }
+
+    /* ============================================================
+       🚀 TURBO MATH TICK — now with freeze detection INSIDE
+       -----------------------------------------------------------
+       CRITICAL: the freeze check runs BEFORE turboLastFrameTime is
+       updated. This is what the previous version got wrong — the
+       loop fires first on wake, so the timestamp was already
+       advanced before reconcileTurbo could see the gap.
+       ============================================================ */
+    function turboMathTick() {
+      if (!turboActive) return;
+
+      const now = Date.now();
+
+      // 🚀 FREEZE DETECTION — BEFORE updating turboLastFrameTime
+      if (turboLastFrameTime > 0 && turboRateFramesPerSec > 0) {
+        const gap = now - turboLastFrameTime;
+        if (gap > 500) {
+          const missed = Math.floor((gap / 1000) * turboRateFramesPerSec) - 1;
+          if (missed > 0) {
+            const actual = Math.min(missed, CATCHUP_CAP);
+            console.log("[Turbo] Freeze " + gap + "ms → catching up " + actual + " frames");
+            applyTurboFrames(actual);
+            turboFrames += actual;
+            setTurboInfo("⚡ Caught up " + actual.toLocaleString("en-IN") + " missed Turbo frames.", false, true);
+          }
+        }
+      }
+
+      // Do the single-frame increment
+      if (turboHyper) {
+        const batchSci = (turboBoostActive && turboBoostedBatchSci)
+          ? turboBoostedBatchSci
+          : (turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 0 });
+        hyperState.iter = iterAdd(hyperState.iter, batchSci);
+      } else if (turboMode === 2) {
+        const mult = (turboBoostActive && turboBoostedMultiplier)
+          ? turboBoostedMultiplier
+          : turboBatchMultiplier;
+        count = bigMul(count, mult);
+      } else {
+        const addend = (turboBoostActive && turboBoostedAddend)
+          ? turboBoostedAddend
+          : turboBatchAddend;
+        count = bigAdd(count, addend);
+      }
+
+      turboFrames++;
+
+      // Update last frame time AFTER the freeze check
+      turboLastFrameTime = now;
+
+      // Rate sampling
+      if (turboRateSampleStart === 0) {
+        turboRateSampleStart = now;
+        turboRateSampleFrames = 0;
+      }
+      turboRateSampleFrames++;
+      const sampleElapsed = now - turboRateSampleStart;
+      if (sampleElapsed >= 500 && turboRateSampleFrames > 20) {
+        turboRateFramesPerSec = turboRateSampleFrames / (sampleElapsed / 1000);
+        turboRateSampleStart = now;
+        turboRateSampleFrames = 0;
+        console.log("[Turbo] Rate: " + turboRateFramesPerSec.toFixed(0) + " frames/sec");
+      }
+
+      if (turboFrames % 1000 === 0 && currentMantra) {
+        storeCount(currentMantra, count);
+      }
+
+      turboMathTimer = setTimeout(turboMathTick, 0);
+    }
+
+    function reconcileTurbo() {
+      if (!turboActive) return;
+      if (!turboLastFrameTime || turboRateFramesPerSec <= 0) return;
+
+      const now = Date.now();
+      const elapsed = now - turboLastFrameTime;
+      if (elapsed < 500) return;
+
+      const missed = Math.floor((elapsed / 1000) * turboRateFramesPerSec) - 1;
+      if (missed <= 0) return;
+
+      const actual = Math.min(missed, CATCHUP_CAP);
+      console.log("[Turbo] Wake reconcile: " + elapsed + "ms → " + actual + " frames");
+      applyTurboFrames(actual);
+      turboFrames += actual;
+      setTurboInfo("⚡ Caught up " + actual.toLocaleString("en-IN") + " missed Turbo frames.", false, true);
+      turboLastFrameTime = now;
+    }
+
+    function turboDisplayLoop() {
+      if (!turboActive) return;
+      updateDisplay();
+      turboDisplayRAF = requestAnimationFrame(turboDisplayLoop);
+    }
+
+    document.addEventListener("keydown", function(e) {
+      const el = e.target;
+      const elId = (el && el.id) ? el.id : "";
+      if (elId === "customKeyInput") return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const tag = (el && el.tagName) ? el.tagName.toLowerCase() : "";
+      const inInput = (tag === "input" || tag === "select" || tag === "textarea" || (el && el.isContentEditable));
+      const isEnter = (e.key === "Enter" || e.code === "NumpadEnter");
+      const isCustom = (customKey && customKey !== "Enter" && e.key === customKey);
+
+      let shouldTrigger = false;
+      if (isEnter && elId !== "mantraInput") shouldTrigger = true;
+      else if (isCustom && !inInput) shouldTrigger = true;
+      if (!shouldTrigger) return;
+      e.preventDefault();
+
+      if (turboEnabled) {
+        if (turboActive) {
+          if (rightClickBoostLock) return;
+          if (!turboBoostActive) {
+            turboBoostActive = true;
+            setTurboInfo("🚀 BOOST ×" + turboBoostFactor.toLocaleString("en-IN") + " ACTIVE — release key to stop boost.", true);
+          }
+        } else {
+          startTurbo();
+          keyStartedTurbo = true;
+        }
+      } else {
+        startKeyHold();
+      }
+    });
+
+    document.addEventListener("keyup", function(e) {
+      const isEnter = (e.key === "Enter" || e.code === "NumpadEnter");
+      const isCustom = (customKey && customKey === e.key);
+      if (!isEnter && !isCustom) return;
+
+      if (rightClickBoostLock) return;
+
+      if (turboBoostActive) {
+        turboBoostActive = false;
+        if (autoRepeatUsingTurbo) {
+          setTurboInfo("🚀 Auto Repeat running in Turbo mode. Hold Enter for " + turboBoostFactor.toLocaleString("en-IN") + "× boost.", false);
+        }
+        return;
+      }
+      if (autoRepeatUsingTurbo) return;
+      if (keyStartedTurbo) {
+        keyStartedTurbo = false;
+        stopTurbo();
+        return;
+      }
+      if (turboEnabled) stopTurbo();
+      else stopKeyHold();
+    });
+
+    window.addEventListener("blur", function() {
+      if (autoRepeatUsingTurbo) return;
+      stopKeyHold();
+      if (turboActive) stopTurbo();
+    });
+
+    const repeatBtnEl = document.getElementById("repeatBtn");
+
+    if (repeatBtnEl) {
+      repeatBtnEl.addEventListener("pointerdown", function(e) {
+        if (e.pointerType === "mouse" && e.button !== 0) return;
+        e.preventDefault();
+        if (rightClickBoostLock) return;
+        if (turboEnabled) {
+          if (turboActive) {
+            if (!turboBoostActive) {
+              turboBoostActive = true;
+              setTurboInfo("🚀 BOOST ×" + turboBoostFactor.toLocaleString("en-IN") + " ACTIVE — release to stop boost.", true);
+            }
+          } else {
+            startTurbo();
+            keyStartedTurbo = true;
+          }
+        } else {
+          startKeyHold();
+        }
+      });
+
+      const endHold = function(e) {
+        if (e && e.pointerType === "mouse" && e.button !== 0) return;
+        if (e && e.preventDefault) e.preventDefault();
+        if (rightClickBoostLock) return;
+        if (turboBoostActive) {
+          turboBoostActive = false;
+          if (autoRepeatUsingTurbo) {
+            setTurboInfo("🚀 Auto Repeat running in Turbo mode. Hold Enter for " + turboBoostFactor.toLocaleString("en-IN") + "× boost.", false);
+          }
+          return;
+        }
+        if (autoRepeatUsingTurbo) return;
+        if (keyStartedTurbo) {
+          keyStartedTurbo = false;
+          stopTurbo();
+          return;
+        }
+        if (turboEnabled) stopTurbo();
+        else stopKeyHold();
+      };
+
+      repeatBtnEl.addEventListener("pointerup", endHold);
+      repeatBtnEl.addEventListener("pointercancel", endHold);
+      repeatBtnEl.addEventListener("pointerleave", endHold);
+
+      repeatBtnEl.addEventListener("contextmenu", function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const turboBtn = document.getElementById("turboBtn");
+        const autoBtn = document.getElementById("autoRepeatBtn");
+
+        if (turboEnabled && autoRepeatUsingTurbo && turboActive) {
+          console.log("[RC] Case A: Turbo → Normal");
+          turboEnabled = false;
+          autoRepeatUsingTurbo = false;
+          rightClickBoostLock = false;
+          turboBoostActive = false;
+          stopTurbo();
+          turboBtn.textContent = "🚀 Turbo: OFF";
+          turboBtn.classList.remove("on");
+          setRepeatButtonTurboLock(false);
+
+          if (currentMantra) {
+            startNormalAutoRepeat();
+            setRepeatButtonNormalLock(true);
+            autoBtn.textContent = "Stop Auto Repeat";
+            setTurboInfo("🚀 Turbo OFF — Auto Repeat continues at NORMAL speed. Right-click for Turbo.", false);
+          }
+          return;
+        }
+
+        if (!turboEnabled && (autoRepeatTimer !== null)) {
+          console.log("[RC] Case B: Normal → Turbo");
+          stopNormalAutoRepeat();
+          setRepeatButtonNormalLock(false);
+
+          turboEnabled = true;
+          turboBtn.textContent = "🚀 Turbo: ON";
+          turboBtn.classList.add("on");
+
+          if (currentMantra) {
+            autoRepeatUsingTurbo = true;
+            rightClickBoostLock = true;
+            startTurbo();
+            turboBoostActive = true;
+            setRepeatButtonTurboLock(true);
+            autoBtn.textContent = "Stop Auto Repeat";
+            setTurboInfo("🚀 Turbo + BOOST ×" + turboBoostFactor.toLocaleString("en-IN") + " running. Right-click for NORMAL speed.", true);
+          } else {
+            setTurboInfo("Turbo mode ON via right-click. Set a mantra to start counting.", false);
+          }
+          return;
+        }
+
+        console.log("[RC] Case C: Start fresh Turbo");
+        stopNormalAutoRepeat();
+        if (turboActive) stopTurbo();
+
+        turboEnabled = true;
+        turboBtn.textContent = "🚀 Turbo: ON";
+        turboBtn.classList.add("on");
+
+        if (currentMantra) {
+          autoRepeatUsingTurbo = true;
+          rightClickBoostLock = true;
+          startTurbo();
+          turboBoostActive = true;
+          setRepeatButtonTurboLock(true);
+          autoBtn.textContent = "Stop Auto Repeat";
+          setTurboInfo("🚀 Turbo + BOOST ×" + turboBoostFactor.toLocaleString("en-IN") + " running. Right-click for NORMAL speed.", true);
+        } else {
+          setTurboInfo("Turbo mode ON via right-click. Set a mantra to start counting.", false);
+        }
+      });
+    }
+
+    document.addEventListener("contextmenu", function(e) {
+      const el = e.target;
+      const tag = (el && el.tagName) ? el.tagName.toLowerCase() : "";
+      if (tag === "button" && el.id !== "repeatBtn") {
+        e.preventDefault();
+      }
+    }, { passive: false });
+
+    document.addEventListener("touchmove", function(e) {
+      const el = e.target;
+      const tag = (el && el.tagName) ? el.tagName.toLowerCase() : "";
+      if (tag === "button") e.preventDefault();
+    }, { passive: false });
+
+    /* ⏱️ Wake handlers — reconcile BOTH normal and turbo */
+    document.addEventListener("visibilitychange", function() {
+      if (document.visibilityState === "visible") {
+        console.log("[Visibility] Visible — reconciling");
+        reconcileAutoRepeat();
+        reconcileTurbo();
+      } else {
+        if (currentMantra) storeCount(currentMantra, count);
+        if (autoRepeatState) lsSet("autoRepeatState", JSON.stringify(autoRepeatState));
+      }
+    });
+    window.addEventListener("pageshow", function() {
+      reconcileAutoRepeat();
+      reconcileTurbo();
+    });
+    window.addEventListener("focus", function() {
+      reconcileAutoRepeat();
+      reconcileTurbo();
+    });
+
+    window.setMantra = setMantra;
+    window.removeGodImage = removeGodImage;
+    window.loadSelectedMantra = loadSelectedMantra;
+    window.repeatMantra = repeatMantra;
+    window.resetCount = resetCount;
+    window.viewHistory = viewHistory;
+    window.toggleAutoRepeat = toggleAutoRepeat;
+    window.setTheme = setTheme;
+    window.clearCustomKey = clearCustomKey;
+    window.toggleTurbo = toggleTurbo;
+
+    function scheduleCloudSave() {
+      if (!currentUserId) { updateSyncStatus("", ""); return; }
+      pendingSave = true;
+      updateSyncStatus("syncing", "Waiting to sync...");
+      clearTimeout(saveTimeout);
+      saveTimeout = setTimeout(function() {
+        saveDataToCloud();
+      }, 5000);
+    }
+
+    async function saveDataToCloud() {
+      if (!currentUserId) { updateSyncStatus("", ""); return; }
+      clearTimeout(saveTimeout);
+      saveTimeout = null;
+
+      const userDocRef = doc(db, "users", currentUserId);
+      const dataToSave = {
+        currentMantra: currentMantra,
+        count: hyperState ? formatHyper(hyperState) : bigToStorage(count),
+        hyperState: sanitizeHyperState(hyperState),
+        customNumberValue: lsGet('customNumberValue', ''),
+        perPressValue: lsGet('perPressValue', '1'),
+        operationValue: document.getElementById("operationSelect").value,
+        lastUpdated: new Date()
+      };
+
+      updateSyncStatus("syncing", "Syncing...");
+      try {
+        await setDoc(userDocRef, dataToSave, { merge: true });
+        pendingSave = false;
+        const now = new Date().toLocaleTimeString();
+        updateSyncStatus("synced", "✓ Synced at " + now);
+        console.log("Data saved to cloud.");
+      } catch (e) {
+        updateSyncStatus("error", "✗ Sync failed — retrying...");
+        console.error("Error saving document: ", e);
+        setTimeout(function() {
+          if (pendingSave) saveDataToCloud();
+        }, 3000);
+      }
+    }
+
+    async function loadUserDataFromCloud(userId) {
+      const userDocRef = doc(db, "users", userId);
+      updateSyncStatus("syncing", "Loading from cloud...");
+      try {
+        const docSnap = await getDoc(userDocRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          console.log("Data loaded from cloud:", data);
+
+          if (data.currentMantra) {
+            currentMantra = data.currentMantra;
+            document.getElementById('currentMantra').textContent = 'Current: "' + currentMantra + '"';
+          }
+          if (data.hyperState) {
+            hyperState = restoreHyperState(data.hyperState);
+            count = bigZero();
+          } else {
+            hyperState = null;
+            if (data.count !== undefined) count = toBig(data.count);
+          }
+          if (data.customNumberValue !== undefined) {
+            lsSet('customNumberValue', data.customNumberValue);
+            document.getElementById('customNumberInput').value = data.customNumberValue;
+          }
+          if (data.perPressValue !== undefined) {
+            lsSet('perPressValue', data.perPressValue);
+            document.getElementById('perPressInput').value = data.perPressValue;
+          }
+          if (data.operationValue !== undefined) {
+            document.getElementById('operationSelect').value = data.operationValue;
+          }
+          updateDisplay();
+          populateHistoryDropdown();
+          updateSyncStatus("synced", "✓ Loaded from cloud");
+        } else {
+          console.log("No cloud data found for this user. Starting fresh.");
+          updateSyncStatus("", "No cloud data — starting fresh");
+        }
+      } catch (e) {
+        updateSyncStatus("error", "✗ Failed to load from cloud");
+        console.error("Error loading document: ", e);
+      }
+    }
+
+    window.addEventListener("beforeunload", function() {
+      if (pendingSave && currentUserId) {
+        try { saveDataToCloud(); } catch (e) { }
+      }
+    });
+
+    const provider = new GoogleAuthProvider();
+    const signInButton = document.getElementById('google-signin-btn');
+    const signOutButton = document.getElementById('signout-btn');
+    const userInfoDiv = document.getElementById('user-info');
+    const userNameSpan = document.getElementById('user-name');
+
+    signInButton.addEventListener('click', function() {
+      signInWithPopup(auth, provider).catch(function(error) {
+        console.error("Error during sign-in:", error);
+        alert("Sign-in failed: " + error.message);
+      });
+    });
+
+    signOutButton.addEventListener('click', function() {
+      signOut(auth).catch(function(error) {
+        console.error("Error during sign-out:", error);
+      });
+    });
+
+    onAuthStateChanged(auth, function(user) {
+      if (user) {
+        console.log("User signed in:", user.uid);
+        currentUserId = user.uid;
+        userNameSpan.textContent = "Hello, " + user.displayName + "!";
+        signInButton.style.display = 'none';
+        userInfoDiv.style.display = 'flex';
+        loadUserDataFromCloud(user.uid);
+      } else {
+        console.log("User signed out.");
+        currentUserId = null;
+        signInButton.style.display = 'block';
+        userInfoDiv.style.display = 'none';
+        updateSyncStatus("", "");
+      }
+    });
+
+    window.onload = function() {
+      loadTheme();
+      populateHistoryDropdown();
+      loadSavedRepetitionPerPress();
+      loadSavedCustomNumber();
+      loadSavedOperation();
+      loadSavedTurboSpeed();
+      loadSavedBoost();
+      const savedKey = lsGet("customKeyMapping", "");
+      if (savedKey) setCustomKey(savedKey);
+      updateDisplay();
+
+      setTimeout(function() {
+        if (resumeAutoRepeatIfNeeded()) {
+          setTurboInfo("⚡ Resumed auto-repeat after screen-off. Reconciling...", false, true);
+        }
+      }, 500);
+    };
+  </script>
+</body>
+  </html>
