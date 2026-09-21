@@ -284,8 +284,6 @@
     let hyperState = null;
     let currentMantra = "";
     let currentMantraImg = "";
-    let autoRepeatInterval = null;
-    let autoRepeatIntervalMs = 1000;
     let customKey = "";
     let currentUserId = null;
     let saveTimeout = null;
@@ -315,20 +313,21 @@
     let keyStartedTurbo = false;
     let rightClickBoostLock = false;
 
-    // ⏱️ Freeze-detection + catch-up state
-    let autoRepeatLastTickTime = null;
-    let turboLastTickTime = null;
-    let turboRateTicksPerSec = 0;
-    let turboRateSampleTime = 0;
-    let heartbeatTimer = null;
-    let lastHeartbeatAt = 0;
-    let resumeInProgress = false;
+    // 🚀 Turbo wall-clock reconciliation state
+    let turboRateFramesPerSec = 0;
+    let turboRateSampleStart = 0;
+    let turboRateSampleFrames = 0;
+    let turboLastFrameTime = 0;
+
+    // ⏱️ Normal Auto-Repeat wall-clock state
+    let autoRepeatState = null;
+    let autoRepeatTimer = null;
+    let autoRepeatApplied = 0;
+    let lastPersistAt = 0;
 
     const MAX_SAFE_EXP = 9007199254740991;
     const MAX_ABSORB_EXP = 100000;
-    const CATCHUP_CAP = 200000;
-    const FREEZE_THRESHOLD_MS = 3000;
-    const HEARTBEAT_INTERVAL_MS = 500;
+    const CATCHUP_CAP = 1000000;
 
     function bigZero() { return { m: 0n, e: 0 }; }
 
@@ -570,41 +569,27 @@
       return result;
     }
 
-    function sanitizeHyperState(state) {
-      if (!state) return null;
-      const out = { base: state.base, op: state.op };
-      const iter = state.iter;
-      if (typeof iter === "number") {
-        out.iter = iter;
-      } else if (typeof iter === "bigint") {
-        out.iter = iter.toString();
-      } else if (iter && typeof iter === "object" && typeof iter.m === "bigint") {
-        out.iter = { m: iter.m.toString(), e: iter.e };
-      } else {
-        out.iter = 0;
+    function iterToString(iter) {
+      if (typeof iter === "number") return { type: "num", val: iter };
+      if (iter && typeof iter === "object" && typeof iter.m === "bigint") {
+        return { type: "sci", m: iter.m.toString(), e: iter.e };
       }
-      return out;
+      return { type: "num", val: 0 };
+    }
+    function iterFromString(data) {
+      if (!data) return 0;
+      if (data.type === "num") return data.val;
+      if (data.type === "sci") return { m: BigInt(data.m), e: data.e };
+      return 0;
     }
 
+    function sanitizeHyperState(state) {
+      if (!state) return null;
+      return { base: state.base, op: state.op, iter: iterToString(state.iter) };
+    }
     function restoreHyperState(data) {
       if (!data) return null;
-      const iter = data.iter;
-      let restoredIter;
-      if (typeof iter === "number") {
-        restoredIter = iter;
-      } else if (typeof iter === "string") {
-        const sci = bigFromString(iter);
-        restoredIter = sci || parseInt(iter, 10) || 0;
-      } else if (iter && typeof iter === "object" && typeof iter.m === "string") {
-        try {
-          restoredIter = { m: BigInt(iter.m), e: iter.e };
-        } catch (e) {
-          restoredIter = 0;
-        }
-      } else {
-        restoredIter = 0;
-      }
-      return { base: data.base, op: data.op, iter: restoredIter };
+      return { base: data.base, op: data.op, iter: data.iter ? iterFromString(data.iter) : 0 };
     }
 
     function lsGet(key, fallback) {
@@ -711,91 +696,160 @@
       scheduleCloudSave();
     }
 
-    /* 🚀 Batch catch-up — applies N missed ticks in ONE operation.
-       Math is equivalent to calling applySilentTick N times, just faster. */
-    function catchUpTicks(missedTicks) {
-      if (missedTicks <= 0) return 0;
+    /* ============================================================
+       ⏱️ WALL-CLOCK NORMAL AUTO REPEAT
+       ============================================================ */
+    function startNormalAutoRepeat() {
+      stopNormalAutoRepeat();
+
+      const intervalMs = parseFloat(document.getElementById("intervalSelect").value) || 1000;
       const op = parseInt(document.getElementById("operationSelect").value) || 1;
       const raw = document.getElementById("perPressInput").value || "1";
+
+      autoRepeatState = {
+        startedAt: Date.now(),
+        intervalMs: intervalMs,
+        op: op,
+        raw: raw,
+        currentMantra: currentMantra
+      };
+      autoRepeatApplied = 0;
+      lsSet("autoRepeatState", JSON.stringify(autoRepeatState));
+
+      autoRepeatTimer = setInterval(reconcileAutoRepeat, 100);
+      reconcileAutoRepeat();
+      console.log("[AutoRepeat] Started — interval " + intervalMs + "ms, op " + op);
+    }
+
+    function reconcileAutoRepeat() {
+      if (!autoRepeatState) return;
+      const elapsed = Date.now() - autoRepeatState.startedAt;
+      const expectedTicks = Math.floor(elapsed / autoRepeatState.intervalMs);
+      const missed = expectedTicks - autoRepeatApplied;
+      if (missed <= 0) return;
+
+      const actual = Math.min(missed, CATCHUP_CAP);
+      applyBatchTicks(actual);
+      autoRepeatApplied = expectedTicks;
+
+      if (missed > 5) {
+        setTurboInfo("⚡ Caught up " + actual.toLocaleString("en-IN") + " missed ticks after screen was off.", false, true);
+      }
+    }
+
+    function applyBatchTicks(n) {
+      if (!autoRepeatState || n <= 0) return;
+      const op = autoRepeatState.op;
+      const raw = autoRepeatState.raw;
       const parsed = parseRepetitionValue(raw);
       const reps = parsed.sci;
-      const actual = Math.min(missedTicks, CATCHUP_CAP);
-      const t0 = performance.now();
 
       if (op >= 3) {
         if (!hyperState || hyperState.base !== raw || hyperState.op !== op) {
           hyperState = { base: raw, op: op, iter: 0 };
         }
-        hyperState.iter = iterAdd(hyperState.iter, bigFromNumber(actual));
+        hyperState.iter = iterAdd(hyperState.iter, bigFromNumber(n));
         count = bigZero();
       } else if (op === 2) {
-        const exp = Math.min(actual, 100000);
+        const exp = Math.min(n, 100000);
         const mult = bigPow(reps, exp);
         count = bigMul(count, mult);
         hyperState = null;
       } else {
-        const totalAdd = bigMul(reps, bigFromNumber(actual));
+        const totalAdd = bigMul(reps, bigFromNumber(n));
         count = bigAdd(count, totalAdd);
         hyperState = null;
       }
 
-      const dt = (performance.now() - t0).toFixed(0);
       updateDisplay();
-      if (currentMantra) storeCount(currentMantra, count);
-      if (currentUserId && currentMantra) scheduleCloudSave();
 
-      console.log("[CatchUp] Applied " + actual + " ticks (batched) in " + dt + "ms"
-        + (missedTicks > CATCHUP_CAP ? " (capped from " + missedTicks + ")" : ""));
-      return actual;
-    }
-
-    /* 🚀 Batch apply turbo increments — for turbo catch-up */
-    function applyTurboBatch(frameCount) {
-      if (frameCount <= 0) return;
-      const op = parseInt(document.getElementById("operationSelect").value) || 1;
-      const raw = document.getElementById("perPressInput").value || "1";
-      const parsed = parseRepetitionValue(raw);
-      const reps = parsed.sci;
-
-      if (op >= 3) {
-        if (!hyperState || hyperState.base !== raw || hyperState.op !== op) {
-          hyperState = { base: raw, op: op, iter: 0 };
-        }
-        const batchSci = getCurrentTurboBatchSci();
-        const total = bigMul(batchSci, bigFromNumber(frameCount));
-        hyperState.iter = iterAdd(hyperState.iter, total);
-        count = bigZero();
-      } else if (op === 2) {
-        const mult = (turboBoostActive && turboBoostedMultiplier)
-          ? turboBoostedMultiplier
-          : turboBatchMultiplier;
-        if (mult) {
-          // Apply mult^frameCount in one go, capped
-          const cap = 100000;
-          const exp = Math.min(frameCount, cap);
-          const combined = bigPow(mult, exp);
-          count = bigMul(count, combined);
-        }
-      } else {
-        const addend = (turboBoostActive && turboBoostedAddend)
-          ? turboBoostedAddend
-          : turboBatchAddend;
-        if (addend) {
-          const total = bigMul(addend, bigFromNumber(frameCount));
-          count = bigAdd(count, total);
-        }
+      const now = Date.now();
+      if (now - lastPersistAt > 2000 || n > 10) {
+        if (currentMantra) storeCount(currentMantra, count);
+        if (currentUserId && currentMantra) scheduleCloudSave();
+        lastPersistAt = now;
       }
-      updateDisplay();
-      if (currentMantra) storeCount(currentMantra, count);
-      if (currentUserId && currentMantra) scheduleCloudSave();
     }
 
-    function getCurrentTurboBatchSci() {
-      if (turboBoostActive && turboBoostedBatchSci) return turboBoostedBatchSci;
-      return turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 0 };
+    function stopNormalAutoRepeat() {
+      if (autoRepeatTimer !== null) {
+        clearInterval(autoRepeatTimer);
+        autoRepeatTimer = null;
+      }
+      if (autoRepeatState) {
+        try { reconcileAutoRepeat(); } catch (e) { }
+        autoRepeatState = null;
+        autoRepeatApplied = 0;
+        lsRemove("autoRepeatState");
+        console.log("[AutoRepeat] Stopped");
+      }
+    }
+
+    function stopAllAutoRepeat() {
+      stopNormalAutoRepeat();
+      autoRepeatUsingTurbo = false;
+      rightClickBoostLock = false;
+      turboBoostActive = false;
+      setRepeatButtonTurboLock(false);
+      setRepeatButtonNormalLock(false);
+      if (turboActive) stopTurbo();
+    }
+
+    function resumeAutoRepeatIfNeeded() {
+      const raw = lsGet("autoRepeatState", "");
+      if (!raw) return false;
+      try {
+        const saved = JSON.parse(raw);
+        if (!saved || !saved.startedAt) return false;
+        autoRepeatState = saved;
+        autoRepeatApplied = 0;
+        lastPersistAt = 0;
+        autoRepeatTimer = setInterval(reconcileAutoRepeat, 100);
+        reconcileAutoRepeat();
+        document.getElementById("autoRepeatBtn").textContent = "Stop Auto Repeat";
+        setRepeatButtonNormalLock(true);
+        console.log("[AutoRepeat] Resumed from saved state (started " +
+          Math.round((Date.now() - saved.startedAt) / 1000) + "s ago)");
+        return true;
+      } catch (e) {
+        console.error("[AutoRepeat] Resume failed:", e);
+        return false;
+      }
+    }
+
+    function toggleAutoRepeat() {
+      const button = document.getElementById("autoRepeatBtn");
+      const isRunning = (autoRepeatTimer !== null) || autoRepeatUsingTurbo;
+
+      if (isRunning) {
+        stopAllAutoRepeat();
+        button.textContent = "Start Auto Repeat";
+      } else {
+        if (!currentMantra) {
+          setTurboInfo("Set a mantra first.", false);
+          return;
+        }
+        if (turboEnabled) {
+          autoRepeatUsingTurbo = true;
+          startTurbo();
+          setTurboInfo("🚀 Auto Repeat running in Turbo mode. Hold Enter for " + turboBoostFactor.toLocaleString("en-IN") + "× boost.", false);
+          setRepeatButtonTurboLock(true);
+          setRepeatButtonNormalLock(false);
+        } else {
+          startNormalAutoRepeat();
+          setRepeatButtonNormalLock(true);
+          setRepeatButtonTurboLock(false);
+        }
+        button.textContent = "Stop Auto Repeat";
+      }
     }
 
     function resetCount() {
+      if (autoRepeatState) {
+        autoRepeatState.startedAt = Date.now();
+        autoRepeatApplied = 0;
+        lsSet("autoRepeatState", JSON.stringify(autoRepeatState));
+      }
       count = bigZero();
       hyperState = null;
       updateDisplay();
@@ -913,73 +967,6 @@
     function removeGodImage() {
       document.getElementById("godImage").src = "";
       currentMantraImg = "";
-    }
-
-    /* ⏱️ Auto Repeat with freeze detection INSIDE the interval callback.
-       This is critical: it fires immediately after wake, BEFORE visibilitychange. */
-    function startNormalAutoRepeat() {
-      stopNormalAutoRepeat();
-      autoRepeatIntervalMs = parseFloat(document.getElementById("intervalSelect").value) || 1000;
-      autoRepeatLastTickTime = Date.now();
-      autoRepeatInterval = setInterval(function() {
-        const now = Date.now();
-        const gap = now - autoRepeatLastTickTime;
-
-        // Freeze detected inside the interval itself
-        if (gap > FREEZE_THRESHOLD_MS) {
-          const missed = Math.floor(gap / autoRepeatIntervalMs) - 1;
-          if (missed > 0) {
-            console.log("[AutoRepeat] Freeze " + gap + "ms → catch-up " + missed + " ticks");
-            const applied = catchUpTicks(missed);
-            setTurboInfo("⚡ Caught up " + applied.toLocaleString("en-IN") + " missed ticks after screen was off.", false, true);
-          }
-        }
-
-        autoRepeatLastTickTime = now;
-        repeatMantra();
-      }, autoRepeatIntervalMs);
-      console.log("[AutoRepeat] Normal started — interval " + autoRepeatIntervalMs + "ms");
-    }
-    function stopNormalAutoRepeat() {
-      if (autoRepeatInterval !== null) {
-        clearInterval(autoRepeatInterval);
-        autoRepeatInterval = null;
-        autoRepeatLastTickTime = null;
-        console.log("[AutoRepeat] Normal stopped");
-      }
-    }
-    function stopAllAutoRepeat() {
-      stopNormalAutoRepeat();
-      autoRepeatUsingTurbo = false;
-      rightClickBoostLock = false;
-      turboBoostActive = false;
-      setRepeatButtonTurboLock(false);
-      setRepeatButtonNormalLock(false);
-      if (turboActive) stopTurbo();
-    }
-
-    function toggleAutoRepeat() {
-      const button = document.getElementById("autoRepeatBtn");
-      const isRunning = (autoRepeatInterval !== null) || autoRepeatUsingTurbo;
-
-      if (isRunning) {
-        stopAllAutoRepeat();
-        button.textContent = "Start Auto Repeat";
-      } else {
-        if (turboEnabled) {
-          if (!currentMantra) return;
-          autoRepeatUsingTurbo = true;
-          startTurbo();
-          setTurboInfo("🚀 Auto Repeat running in Turbo mode. Hold Enter for " + turboBoostFactor.toLocaleString("en-IN") + "× boost.", false);
-          setRepeatButtonTurboLock(true);
-          setRepeatButtonNormalLock(false);
-        } else {
-          startNormalAutoRepeat();
-          setRepeatButtonNormalLock(true);
-          setRepeatButtonTurboLock(false);
-        }
-        button.textContent = "Stop Auto Repeat";
-      }
     }
 
     function setTheme(theme) {
@@ -1185,9 +1172,10 @@
       turboActive = true;
       turboFrames = 0;
       turboStartedAt = performance.now();
-      turboRateSampleTime = Date.now();
-      turboRateTicksPerSec = 0;
-      turboLastTickTime = Date.now();
+      turboRateFramesPerSec = 0;
+      turboRateSampleStart = 0;
+      turboRateSampleFrames = 0;
+      turboLastFrameTime = Date.now();
       applyTurboSpeed(document.getElementById("turboSpeedSelect").value);
       prepareTurbo();
       turboMathTick();
@@ -1224,26 +1212,10 @@
     function turboMathTick() {
       if (!turboActive) return;
 
-      const now = Date.now();
-
-      // Freeze detection INSIDE the turbo loop
-      if (turboLastTickTime !== null && turboRateTicksPerSec > 0) {
-        const gap = now - turboLastTickTime;
-        if (gap > FREEZE_THRESHOLD_MS) {
-          const missed = Math.floor(gap * turboRateTicksPerSec / 1000) - 1;
-          if (missed > 0) {
-            const actual = Math.min(missed, CATCHUP_CAP);
-            console.log("[Turbo] Freeze " + gap + "ms → catch-up " + actual + " frames");
-            applyTurboBatch(actual);
-            turboFrames += actual;
-            setTurboInfo("⚡ Caught up " + actual.toLocaleString("en-IN") + " missed Turbo frames after screen was off.", false, true);
-          }
-        }
-      }
-      turboLastTickTime = now;
-
       if (turboHyper) {
-        const batchSci = getCurrentTurboBatchSci();
+        const batchSci = (turboBoostActive && turboBoostedBatchSci)
+          ? turboBoostedBatchSci
+          : (turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 0 });
         hyperState.iter = iterAdd(hyperState.iter, batchSci);
       } else if (turboMode === 2) {
         const mult = (turboBoostActive && turboBoostedMultiplier)
@@ -1258,12 +1230,20 @@
       }
 
       turboFrames++;
+      const now = Date.now();
+      turboLastFrameTime = now;
 
-      // Sample turbo rate as early as 500ms (was 2000ms)
-      if (now - turboRateSampleTime > 500 && turboFrames > 20) {
-        const totalElapsed = (now - turboStartedAt) / 1000;
-        if (totalElapsed > 0) turboRateTicksPerSec = turboFrames / totalElapsed;
-        turboRateSampleTime = now;
+      if (turboRateSampleStart === 0) {
+        turboRateSampleStart = now;
+        turboRateSampleFrames = 0;
+      }
+      turboRateSampleFrames++;
+      const sampleElapsed = now - turboRateSampleStart;
+      if (sampleElapsed >= 500 && turboRateSampleFrames > 20) {
+        turboRateFramesPerSec = turboRateSampleFrames / (sampleElapsed / 1000);
+        turboRateSampleStart = now;
+        turboRateSampleFrames = 0;
+        console.log("[Turbo] Rate: " + turboRateFramesPerSec.toFixed(0) + " frames/sec");
       }
 
       if (turboFrames % 1000 === 0 && currentMantra) {
@@ -1271,6 +1251,56 @@
       }
 
       turboMathTimer = setTimeout(turboMathTick, 0);
+    }
+
+    function applyTurboFrames(n) {
+      if (n <= 0) return;
+      if (turboHyper) {
+        const batchSci = (turboBoostActive && turboBoostedBatchSci)
+          ? turboBoostedBatchSci
+          : (turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 0 });
+        const total = bigMul(batchSci, bigFromNumber(n));
+        hyperState.iter = iterAdd(hyperState.iter, total);
+      } else if (turboMode === 2) {
+        const mult = (turboBoostActive && turboBoostedMultiplier)
+          ? turboBoostedMultiplier
+          : turboBatchMultiplier;
+        if (mult) {
+          const exp = Math.min(n, 100000);
+          const combined = bigPow(mult, exp);
+          count = bigMul(count, combined);
+        }
+      } else {
+        const addend = (turboBoostActive && turboBoostedAddend)
+          ? turboBoostedAddend
+          : turboBatchAddend;
+        if (addend) {
+          const total = bigMul(addend, bigFromNumber(n));
+          count = bigAdd(count, total);
+        }
+      }
+      updateDisplay();
+      if (currentMantra) storeCount(currentMantra, count);
+      if (currentUserId && currentMantra) scheduleCloudSave();
+    }
+
+    function reconcileTurbo() {
+      if (!turboActive) return;
+      if (!turboLastFrameTime || turboRateFramesPerSec <= 0) return;
+
+      const now = Date.now();
+      const elapsed = now - turboLastFrameTime;
+      if (elapsed < 500) return;
+
+      const missed = Math.floor((elapsed / 1000) * turboRateFramesPerSec) - 1;
+      if (missed <= 0) return;
+
+      const actual = Math.min(missed, CATCHUP_CAP);
+      console.log("[Turbo] Freeze " + elapsed + "ms → catching up " + actual + " frames");
+      applyTurboFrames(actual);
+      turboFrames += actual;
+      setTurboInfo("⚡ Caught up " + actual.toLocaleString("en-IN") + " missed Turbo frames.", false, true);
+      turboLastFrameTime = now;
     }
 
     function turboDisplayLoop() {
@@ -1415,7 +1445,7 @@
           return;
         }
 
-        if (!turboEnabled && autoRepeatInterval !== null) {
+        if (!turboEnabled && (autoRepeatTimer !== null)) {
           console.log("[RC] Case B: Normal → Turbo");
           stopNormalAutoRepeat();
           setRepeatButtonNormalLock(false);
@@ -1474,86 +1504,25 @@
       if (tag === "button") e.preventDefault();
     }, { passive: false });
 
-    /* ============================================================
-       ⏱️ HEARTBEAT + RESUME HANDLING
-       -----------------------------------------------------------
-       Multiple redundant detection paths to catch every wake:
-       1. Interval callback (fires first after Android unfreeze)
-       2. Turbo math callback (same)
-       3. Heartbeat setInterval (fallback)
-       4. visibilitychange / pageshow / focus (browser events)
-       Only ONE catch-up per wake — guarded by resumeInProgress.
-       ============================================================ */
-
-    function handleResume() {
-      if (resumeInProgress) return;
-      resumeInProgress = true;
-      try {
-        const now = Date.now();
-
-        // Normal Auto Repeat catch-up (in case interval callback missed)
-        if (autoRepeatInterval !== null && autoRepeatLastTickTime !== null) {
-          const elapsed = now - autoRepeatLastTickTime;
-          if (elapsed > FREEZE_THRESHOLD_MS) {
-            const missed = Math.floor(elapsed / autoRepeatIntervalMs) - 1;
-            if (missed > 0) {
-              const applied = catchUpTicks(missed);
-              setTurboInfo("⚡ Caught up " + applied.toLocaleString("en-IN") + " missed ticks after screen was off.", false, true);
-            }
-            autoRepeatLastTickTime = now;
-          }
-        }
-
-        // Turbo catch-up (in case turbo callback missed)
-        if (turboActive && turboLastTickTime !== null && turboRateTicksPerSec > 0) {
-          const elapsedSec = (now - turboLastTickTime) / 1000;
-          if (elapsedSec * 1000 > FREEZE_THRESHOLD_MS) {
-            const missed = Math.floor(elapsedSec * turboRateTicksPerSec) - 1;
-            if (missed > 0) {
-              const actual = Math.min(missed, CATCHUP_CAP);
-              applyTurboBatch(actual);
-              turboFrames += actual;
-              setTurboInfo("⚡ Caught up " + actual.toLocaleString("en-IN") + " missed Turbo frames after screen was off.", false, true);
-            }
-          }
-          turboLastTickTime = now;
-        }
-      } finally {
-        setTimeout(function() { resumeInProgress = false; }, 200);
-      }
-    }
-
-    function startHeartbeat() {
-      if (heartbeatTimer !== null) return;
-      lastHeartbeatAt = Date.now();
-      heartbeatTimer = setInterval(function() {
-        const now = Date.now();
-        const gap = now - lastHeartbeatAt;
-        lastHeartbeatAt = now;
-        if (gap > FREEZE_THRESHOLD_MS) {
-          console.log("[Heartbeat] Freeze detected — gap " + gap + "ms");
-          handleResume();
-        }
-      }, HEARTBEAT_INTERVAL_MS);
-      console.log("[Heartbeat] Started");
-    }
-
+    /* ⏱️ Wake handlers — reconcile BOTH normal and turbo */
     document.addEventListener("visibilitychange", function() {
-      if (document.visibilityState === "hidden") {
-        // Save current state before the page freezes
-        if (currentMantra) storeCount(currentMantra, count);
-        if (pendingSave && currentUserId) {
-          try { saveDataToCloud(); } catch (e) { }
-        }
-        console.log("[Visibility] Hidden — state saved");
+      if (document.visibilityState === "visible") {
+        console.log("[Visibility] Visible — reconciling");
+        reconcileAutoRepeat();
+        reconcileTurbo();
       } else {
-        console.log("[Visibility] Visible — checking for freeze");
-        handleResume();
+        if (currentMantra) storeCount(currentMantra, count);
+        if (autoRepeatState) lsSet("autoRepeatState", JSON.stringify(autoRepeatState));
       }
     });
-
-    window.addEventListener("pageshow", handleResume);
-    window.addEventListener("focus", handleResume);
+    window.addEventListener("pageshow", function() {
+      reconcileAutoRepeat();
+      reconcileTurbo();
+    });
+    window.addEventListener("focus", function() {
+      reconcileAutoRepeat();
+      reconcileTurbo();
+    });
 
     window.setMantra = setMantra;
     window.removeGodImage = removeGodImage;
@@ -1705,7 +1674,12 @@
       const savedKey = lsGet("customKeyMapping", "");
       if (savedKey) setCustomKey(savedKey);
       updateDisplay();
-      startHeartbeat();
+
+      setTimeout(function() {
+        if (resumeAutoRepeatIfNeeded()) {
+          setTurboInfo("⚡ Resumed auto-repeat after screen-off. Reconciling...", false, true);
+        }
+      }, 500);
     };
   </script>
 </body>
